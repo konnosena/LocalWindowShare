@@ -196,7 +196,7 @@ button:disabled {
 
 .frame-stage {
     position: absolute;
-    inset: 0 0 80px 0;
+    inset: 0;
     display: grid;
     place-items: center;
     overflow: hidden;
@@ -269,8 +269,8 @@ button:disabled {
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 84px;
-    z-index: 3;
+    bottom: 80px;
+    z-index: 5;
     padding: 2px 12px;
     text-align: center;
     font-size: 0.68rem;

@@ -38,6 +38,7 @@ internal sealed class PortalControlForm : Form
     private IReadOnlyList<ClientConnectionSnapshot> _lastRenderedSnapshots = Array.Empty<ClientConnectionSnapshot>();
     private long _lastRenderedLogSequenceId;
     private bool _initialPlacementApplied;
+    private bool _startupConnectAttempted;
 
     public PortalControlForm(
         PortalRuntimeState runtimeState,
@@ -209,7 +210,7 @@ internal sealed class PortalControlForm : Form
         passwordRow.Controls.Add(generateTokenButton);
 
         _passwordHintLabel = CreateInfoLabel();
-        _passwordHintLabel.Text = "起動直後は接続 OFF です。必要なときに接続を ON にしてください。";
+        _passwordHintLabel.Text = "起動後に自動で接続を ON にします。";
         passwordLayout.Controls.Add(_passwordHintLabel, 0, 1);
 
         _contentSplit = new SplitContainer
@@ -365,6 +366,19 @@ internal sealed class PortalControlForm : Form
         _refreshTimer.Stop();
         _refreshTimer.Dispose();
         base.OnFormClosed(e);
+    }
+
+    protected override async void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+
+        if (_startupConnectAttempted)
+        {
+            return;
+        }
+
+        _startupConnectAttempted = true;
+        await EnsureServerStartedOnLaunchAsync();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -534,6 +548,36 @@ internal sealed class PortalControlForm : Form
         catch (Exception exception)
         {
             MessageBox.Show(this, exception.Message, "Password update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task EnsureServerStartedOnLaunchAsync()
+    {
+        if (_server.IsRunning)
+        {
+            RefreshDynamicState();
+            return;
+        }
+
+        _connectionToggleButton.Enabled = false;
+        _applyPortButton.Enabled = false;
+
+        try
+        {
+            _passwordHintLabel.Text = "起動時の自動接続を開始しています...";
+            await _server.StartAsync();
+            _passwordHintLabel.Text = "起動時に接続を ON にしました。";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "Auto-start failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _passwordHintLabel.Text = "起動時の自動接続に失敗しました。手動で接続を ON にしてください。";
+        }
+        finally
+        {
+            _connectionToggleButton.Enabled = true;
+            _applyPortButton.Enabled = true;
+            RefreshDynamicState();
         }
     }
 

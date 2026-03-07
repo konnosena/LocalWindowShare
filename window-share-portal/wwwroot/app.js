@@ -43,8 +43,8 @@ const state = {
     frameTimer: null,
     frameBusy: false,
     frameUrl: null,
-    frameImageWidth: 0,
-    frameImageHeight: 0,
+    frameVideoWidth: 0,
+    frameVideoHeight: 0,
     peerConnection: null,
     signalingSocket: null,
     webrtcGeneration: 0,
@@ -71,6 +71,7 @@ const state = {
     cursorRatio: null,
     cursorStyle: "mouse",
     frameScale: 1,
+    frameAutoScale: 1,
     frameTranslateX: 0,
     frameTranslateY: 0,
     frameRate: loadFrameRatePreference(),
@@ -84,6 +85,9 @@ const state = {
     scrollPadLastClientY: null,
     scrollPadCarry: 0,
     drawerOpen: false,
+    activeStreamHandle: null,
+    activeStreamMaxWidth: null,
+    streamTargetSyncTimer: null,
     filterWindowsTerminal: loadFilterWtPreference(),
     savedWindowBounds: null,
     resizeBusy: false,
@@ -214,9 +218,11 @@ function bindEvents() {
     }, { passive: false });
     elements.windowFrame.addEventListener("touchcancel", handleFrameTouchCancel, { passive: false });
     window.addEventListener("resize", () => {
+        updateAutoFrameScale();
         constrainFrameTransform();
         syncFrameTransform();
         syncFrameCursor();
+        scheduleActiveStreamTargetSync();
     });
 
     for (const button of elements.quickKeyButtons) {
@@ -417,6 +423,10 @@ async function _doToggleMobileResize() {
             throw new Error(body.message || "Failed to restore window size.");
         }
 
+        if (state.selectedWindow?.bounds) {
+            state.selectedWindow.bounds = { ...bounds };
+            updateSelectedWindowPresentation();
+        }
         state.savedWindowBounds = null;
         elements.viewerStatus.textContent = `Restored to ${bounds.width}x${bounds.height}.`;
     } else {
@@ -425,8 +435,8 @@ async function _doToggleMobileResize() {
         const scrollRailWidth = 32;
         const availableWidth = Math.floor(stageRect.width - scrollRailWidth);
         const availableHeight = Math.floor(stageRect.height - headerHeight);
-        const targetWidth = Math.max(600, Math.min(availableWidth, 1200));
-        const targetHeight = Math.max(800, Math.min(availableHeight, 2400));
+        const targetWidth = Math.max(900, Math.min(availableWidth, 1800));
+        const targetHeight = Math.max(1200, Math.min(availableHeight, 3600));
 
         const response = await fetch(`/api/windows/${state.selectedHandle}/resize`, {
             method: "POST",
@@ -441,11 +451,18 @@ async function _doToggleMobileResize() {
         }
 
         const result = await response.json();
+        if (state.selectedWindow?.bounds) {
+            state.selectedWindow.bounds = {
+                ...state.selectedWindow.bounds,
+                width: targetWidth,
+                height: targetHeight,
+            };
+            updateSelectedWindowPresentation();
+        }
         state.savedWindowBounds = result.previousBounds;
         elements.viewerStatus.textContent = `Resized to ${targetWidth}x${targetHeight}.`;
     }
 
-    await refreshFrameNow(true);
 }
 
 async function launchApp(app) {
@@ -478,9 +495,24 @@ async function refreshWindows(preserveSelection) {
     renderWindowList(payload.windows);
 
     if (preserveSelection && state.selectedHandle) {
-        const stillExists = payload.windows.some((windowInfo) => windowInfo.handle === state.selectedHandle);
+        const selectedSummary = payload.windows.find((windowInfo) => windowInfo.handle === state.selectedHandle);
+        const stillExists = Boolean(selectedSummary);
         if (stillExists) {
+            if (selectedSummary && state.selectedWindow) {
+                state.selectedWindow = {
+                    ...state.selectedWindow,
+                    title: selectedSummary.title,
+                    processId: selectedSummary.processId,
+                    processName: selectedSummary.processName,
+                    className: selectedSummary.className,
+                    isMinimized: selectedSummary.isMinimized,
+                    isForeground: selectedSummary.isForeground,
+                    bounds: selectedSummary.bounds,
+                };
+                updateSelectedWindowPresentation();
+            }
             highlightSelectedWindow();
+            scheduleActiveStreamTargetSync();
             return;
         }
     }
@@ -529,8 +561,9 @@ function renderWindowList(windows) {
 
 async function selectWindow(handle, closeMenuAfterSelection = true) {
     const selectionId = ++state.selectionGeneration;
+    const canSwitchLiveStream = canSwitchActiveWebRtcStreamWithoutReconnect();
 
-    if (state.selectedHandle && state.selectedHandle !== handle) {
+    if (!canSwitchLiveStream && state.selectedHandle && state.selectedHandle !== handle) {
         await disconnectWebRtcSession({ clearVideo: true });
     }
 
@@ -551,7 +584,12 @@ async function selectWindow(handle, closeMenuAfterSelection = true) {
     state.selectedWindow = await response.json();
     renderSelection();
     highlightSelectedWindow();
-    startFrameLoop();
+    if (canSwitchLiveStream) {
+        elements.viewerStatus.textContent = "Switching window without reconnecting...";
+        await updateActiveStreamTarget(true);
+    } else {
+        startFrameLoop();
+    }
 
     if (closeMenuAfterSelection) {
         closeDrawer();
@@ -568,16 +606,11 @@ function renderSelection() {
     state.cursorRatio = { x: 0.5, y: 0.5 };
     state.cursorStyle = "mouse";
     state.frameScale = 1;
+    state.frameAutoScale = 1;
     state.frameTranslateX = 0;
     state.frameTranslateY = 0;
-    state.frameImageWidth = state.selectedWindow.bounds.width;
-    state.frameImageHeight = state.selectedWindow.bounds.height;
 
-    const title = state.selectedWindow.title;
-    const meta = `${state.selectedWindow.processName} · ${state.selectedWindow.bounds.width} x ${state.selectedWindow.bounds.height}`;
-    elements.selectedTitle.textContent = title;
-    elements.selectedMeta.textContent = meta;
-    elements.viewerWindowTitle.textContent = title;
+    updateSelectedWindowPresentation();
     elements.activateButton.disabled = false;
     elements.frameRefreshButton.disabled = false;
     elements.textInput.disabled = false;
@@ -585,6 +618,22 @@ function renderSelection() {
     for (const button of elements.quickKeyButtons) {
         button.disabled = false;
     }
+    renderHeaderNavigation();
+    syncFrameTransform();
+    syncFrameCursor();
+}
+
+function updateSelectedWindowPresentation() {
+    if (!state.selectedWindow) {
+        return;
+    }
+
+    const title = state.selectedWindow.title;
+    const meta = `${state.selectedWindow.processName} · ${state.selectedWindow.bounds.width} x ${state.selectedWindow.bounds.height}`;
+    elements.selectedTitle.textContent = title;
+    elements.selectedMeta.textContent = meta;
+    elements.viewerWindowTitle.textContent = title;
+    updateAutoFrameScale();
     renderHeaderNavigation();
     syncFrameTransform();
     syncFrameCursor();
@@ -600,11 +649,12 @@ function resetSelection() {
     state.cursorRatio = null;
     state.cursorStyle = "mouse";
     state.frameScale = 1;
+    state.frameAutoScale = 1;
     state.frameTranslateX = 0;
     state.frameTranslateY = 0;
     state.windows = [];
-    state.frameImageWidth = 0;
-    state.frameImageHeight = 0;
+    state.frameVideoWidth = 0;
+    state.frameVideoHeight = 0;
     state.moveRequestInFlight = false;
     state.queuedMoveRatio = null;
     elements.selectedTitle.textContent = "No window selected";
@@ -749,6 +799,57 @@ function getNextFrameDelay(startedAt) {
     return Math.max(0, getFrameIntervalMs() - elapsed);
 }
 
+function canSwitchActiveWebRtcStreamWithoutReconnect() {
+    return Boolean(
+        state.selectedHandle
+        && state.webrtcConnected
+        && state.peerConnection
+        && state.peerConnection.connectionState === "connected"
+        && state.signalingSocket
+        && state.signalingSocket.readyState === WebSocket.OPEN
+    );
+}
+
+function scheduleActiveStreamTargetSync() {
+    if (!canSwitchActiveWebRtcStreamWithoutReconnect()) {
+        return;
+    }
+
+    if (state.streamTargetSyncTimer) {
+        window.clearTimeout(state.streamTargetSyncTimer);
+    }
+
+    state.streamTargetSyncTimer = window.setTimeout(() => {
+        state.streamTargetSyncTimer = null;
+        updateActiveStreamTarget(false).catch(showTransientError);
+    }, 160);
+}
+
+async function updateActiveStreamTarget(force) {
+    if (!canSwitchActiveWebRtcStreamWithoutReconnect()) {
+        return false;
+    }
+
+    const requestedWidth = getRequestedFrameWidth();
+    const handleChanged = state.activeStreamHandle !== state.selectedHandle;
+    const widthChanged = state.activeStreamMaxWidth !== requestedWidth;
+    if (!force && !handleChanged && !widthChanged) {
+        return false;
+    }
+
+    const payload = {
+        type: handleChanged ? "switch-window" : "update-stream",
+        handle: state.selectedHandle,
+        maxWidth: requestedWidth,
+    };
+
+    state.signalingSocket.send(JSON.stringify(payload));
+    state.activeStreamHandle = state.selectedHandle;
+    state.activeStreamMaxWidth = requestedWidth;
+    logClientEvent("info", "Updated active WebRTC capture target.", payload);
+    return true;
+}
+
 async function refreshFrameNow(force) {
     if (!state.selectedHandle || state.frameBusy) {
         return;
@@ -774,9 +875,8 @@ async function ensureWebRtcSession(forceReconnect) {
         return;
     }
 
-    const requestedWidth = getRequestedFrameWidth();
     const selectedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
-    const currentKey = `${state.selectedHandle}:${state.frameRate}:${state.streamMode}:${selectedCodec}:${requestedWidth}`;
+    const currentKey = `${state.frameRate}:${state.streamMode}:${selectedCodec}`;
     const isActive = state.webrtcConnected
         && state.peerConnection
         && state.signalingSocket
@@ -785,9 +885,11 @@ async function ensureWebRtcSession(forceReconnect) {
         && state.peerConnection.__streamKey === currentKey;
 
     if (!forceReconnect && isActive) {
+        scheduleActiveStreamTargetSync();
         return;
     }
 
+    const requestedWidth = getRequestedFrameWidth();
     await disconnectWebRtcSession({ clearVideo: forceReconnect });
     await connectWebRtcSession(requestedWidth, currentKey, selectedCodec);
 }
@@ -821,6 +923,8 @@ async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec) {
     state.peerConnection = peerConnection;
     state.signalingSocket = signalingSocket;
     state.webrtcConnected = false;
+    state.activeStreamHandle = state.selectedHandle;
+    state.activeStreamMaxWidth = requestedWidth;
     elements.viewerStatus.textContent = `WebRTC connecting... ${state.frameRate} fps · ${videoCodecLabel(selectedCodec)} pref`;
     elements.framePlaceholder.hidden = false;
     elements.framePlaceholder.textContent = "WebRTC stream connecting...";
@@ -1069,6 +1173,12 @@ async function disconnectWebRtcSession(options = {}) {
     state.webrtcGeneration += 1;
     state.webrtcConnected = false;
     stopFrameLoop();
+    if (state.streamTargetSyncTimer) {
+        window.clearTimeout(state.streamTargetSyncTimer);
+        state.streamTargetSyncTimer = null;
+    }
+    state.activeStreamHandle = null;
+    state.activeStreamMaxWidth = null;
 
     const peerConnection = state.peerConnection;
     const signalingSocket = state.signalingSocket;
@@ -1953,8 +2063,21 @@ function applyRelativeCursorDelta(deltaX, deltaY, options = {}) {
 function syncFrameTransform() {
     const translateX = Math.round(state.frameTranslateX * 100) / 100;
     const translateY = Math.round(state.frameTranslateY * 100) / 100;
-    const scale = Math.round(state.frameScale * 1000) / 1000;
+    const scale = Math.round(getEffectiveFrameScale() * 1000) / 1000;
     elements.windowFrame.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+}
+
+function getEffectiveFrameScale() {
+    return state.frameScale;
+}
+
+function updateAutoFrameScale() {
+    state.frameAutoScale = 1;
+    constrainFrameTransform();
+}
+
+function computeAutoFrameScale() {
+    return 1;
 }
 
 function constrainFrameTransform() {
@@ -1963,8 +2086,9 @@ function constrainFrameTransform() {
     }
 
     const stageRect = elements.frameStage.getBoundingClientRect();
-    const maxOffsetX = Math.max(0, ((state.frameScale - 1) * stageRect.width) / 2);
-    const maxOffsetY = Math.max(0, ((state.frameScale - 1) * stageRect.height) / 2);
+    const effectiveScale = getEffectiveFrameScale();
+    const maxOffsetX = Math.max(0, ((effectiveScale - 1) * stageRect.width) / 2);
+    const maxOffsetY = Math.max(0, ((effectiveScale - 1) * stageRect.height) / 2);
     state.frameTranslateX = clamp(state.frameTranslateX, -maxOffsetX, maxOffsetX);
     state.frameTranslateY = clamp(state.frameTranslateY, -maxOffsetY, maxOffsetY);
 
@@ -2020,8 +2144,9 @@ function updateFrameCursor(ratio, options = {}) {
 }
 
 function handleFrameMetadataLoaded() {
-    state.frameImageWidth = elements.windowFrame.videoWidth || state.frameImageWidth || state.selectedWindow?.bounds.width || 0;
-    state.frameImageHeight = elements.windowFrame.videoHeight || state.frameImageHeight || state.selectedWindow?.bounds.height || 0;
+    state.frameVideoWidth = elements.windowFrame.videoWidth || state.frameVideoWidth || 0;
+    state.frameVideoHeight = elements.windowFrame.videoHeight || state.frameVideoHeight || 0;
+    updateAutoFrameScale();
     syncFrameTransform();
     syncFrameCursor();
 }
@@ -2053,31 +2178,47 @@ function getFrameContentRect() {
         return null;
     }
 
-    const naturalWidth = state.frameImageWidth || elements.windowFrame.videoWidth || rect.width;
-    const naturalHeight = state.frameImageHeight || elements.windowFrame.videoHeight || rect.height;
-    const imageAspect = naturalWidth / naturalHeight;
-    const boxAspect = rect.width / rect.height;
+    const encodedWidth = state.frameVideoWidth || elements.windowFrame.videoWidth || state.selectedWindow?.bounds.width || rect.width;
+    const encodedHeight = state.frameVideoHeight || elements.windowFrame.videoHeight || state.selectedWindow?.bounds.height || rect.height;
+    const sourceWidth = state.selectedWindow?.bounds.width || encodedWidth;
+    const sourceHeight = state.selectedWindow?.bounds.height || encodedHeight;
 
-    if (!Number.isFinite(imageAspect) || imageAspect <= 0 || !Number.isFinite(boxAspect) || boxAspect <= 0) {
+    const encodedRect = fitRectContain(rect, encodedWidth, encodedHeight);
+    if (!encodedRect) {
         return rect;
     }
 
-    if (imageAspect > boxAspect) {
-        const height = rect.width / imageAspect;
+    const sourceRect = fitRectContain(encodedRect, sourceWidth, sourceHeight);
+    return sourceRect || encodedRect;
+}
+
+function fitRectContain(containerRect, contentWidth, contentHeight) {
+    if (!containerRect?.width || !containerRect?.height || !contentWidth || !contentHeight) {
+        return null;
+    }
+
+    const contentAspect = contentWidth / contentHeight;
+    const containerAspect = containerRect.width / containerRect.height;
+    if (!Number.isFinite(contentAspect) || !Number.isFinite(containerAspect) || contentAspect <= 0 || containerAspect <= 0) {
+        return null;
+    }
+
+    if (contentAspect > containerAspect) {
+        const height = containerRect.width / contentAspect;
         return {
-            left: rect.left,
-            top: rect.top + ((rect.height - height) / 2),
-            width: rect.width,
+            left: containerRect.left,
+            top: containerRect.top + ((containerRect.height - height) / 2),
+            width: containerRect.width,
             height,
         };
     }
 
-    const width = rect.height * imageAspect;
+    const width = containerRect.height * contentAspect;
     return {
-        left: rect.left + ((rect.width - width) / 2),
-        top: rect.top,
+        left: containerRect.left + ((containerRect.width - width) / 2),
+        top: containerRect.top,
         width,
-        height: rect.height,
+        height: containerRect.height,
     };
 }
 
