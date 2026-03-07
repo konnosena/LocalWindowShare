@@ -298,12 +298,18 @@ internal sealed class WindowBroker
             return activationError;
         }
 
-        var inputs = BuildTextInputs(request.Text);
-        if (inputs.Length == 0)
+        // クリップボード経由で貼り付け（IMEに干渉されない）
+        var thread = new Thread(() =>
         {
-            return new OperationError(StatusCodes.Status400BadRequest, "Text must contain at least one sendable character.");
-        }
+            System.Windows.Forms.Clipboard.SetText(request.Text);
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
 
+        Thread.Sleep(30);
+
+        var inputs = BuildModifiedVirtualKeyInputs(NativeMethods.VK_CONTROL, (ushort)'V');
         var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
         if (sent != inputs.Length)
         {
