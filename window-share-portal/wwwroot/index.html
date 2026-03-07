@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>Window Share Portal</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <section id="login-panel" class="login-screen">
+        <form id="login-form" class="login-box">
+            <h1>Window Share Portal</h1>
+            <p>接続パスワードを入力してください。</p>
+            <input id="login-token" name="token" type="password" placeholder="Password" autocomplete="current-password" required>
+            <button type="submit">Log In</button>
+            <p id="login-error" class="login-error" hidden></p>
+        </form>
+    </section>
+
+    <section id="workspace" class="workspace-shell" hidden>
+        <div class="viewer-surface">
+            <div class="viewer-overlay">
+                <button id="menu-button" class="menu-button" type="button" aria-label="Open menu">&#9776;</button>
+                <button id="window-prev-button" class="header-nav-button" type="button" aria-label="Previous window">&#8249;</button>
+                <p id="viewer-window-title" class="viewer-window-title">No window selected</p>
+                <button id="window-next-button" class="header-nav-button" type="button" aria-label="Next window">&#8250;</button>
+            </div>
+
+            <div class="frame-stage">
+                <video id="window-frame" autoplay muted playsinline disablepictureinpicture hidden></video>
+                <div id="frame-cursor" class="frame-cursor" hidden aria-hidden="true"></div>
+                <p id="frame-placeholder" class="frame-placeholder">Frame preview will appear here.</p>
+            </div>
+
+            <p id="viewer-status" class="viewer-status">No connection.</p>
+
+            <form id="text-form" class="text-dock">
+                <div class="text-dock-row text-dock-row-main">
+                    <input id="text-input" name="text" type="text" placeholder="text input" disabled>
+                    <button id="text-submit" type="submit" disabled>Send</button>
+                </div>
+                <div class="text-dock-row text-dock-row-tools">
+                    <div class="quick-dpad" aria-label="direction keys">
+                        <button class="quick-key-button quick-key-up" data-key="Up" type="button" disabled>&#8593;</button>
+                        <button class="quick-key-button quick-key-left" data-key="Left" type="button" disabled>&#8592;</button>
+                        <button class="quick-key-button quick-key-down" data-key="Down" type="button" disabled>&#8595;</button>
+                        <button class="quick-key-button quick-key-right" data-key="Right" type="button" disabled>&#8594;</button>
+                    </div>
+                    <button id="quick-backspace" class="quick-key-button quick-key-wide" data-key="Backspace" type="button" disabled>BS</button>
+                    <div id="scroll-pad" class="scroll-pad" aria-label="scroll pad">
+                        <span class="scroll-pad-label">Scroll</span>
+                        <span class="scroll-pad-origin" aria-hidden="true"></span>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+        <aside id="side-drawer" class="side-drawer" aria-hidden="true">
+            <div class="drawer-header">
+                <strong class="drawer-title">Window Share Portal</strong>
+                <button id="drawer-close-button" class="drawer-close" type="button">&#10005;</button>
+            </div>
+
+            <div class="drawer-body">
+                <section class="drawer-section">
+                    <h3 id="selected-title">No window selected</h3>
+                    <p id="selected-meta" class="subtle-copy">一覧から選択してください。</p>
+                    <div class="button-row">
+                        <button id="activate-button" class="ghost-button" type="button" disabled>Activate</button>
+                        <button id="frame-refresh-button" class="ghost-button" type="button" disabled>Reconnect</button>
+                    </div>
+                </section>
+
+                <section class="drawer-section">
+                    <div class="section-header">
+                        <h3>Windows</h3>
+                        <button id="refresh-button" class="ghost-button" type="button">Refresh</button>
+                    </div>
+                    <div id="window-list" class="window-list"></div>
+                </section>
+
+                <section class="drawer-section">
+                    <h3>Pointer</h3>
+                    <div class="pointer-mode-row">
+                        <button class="pointer-mode-button active" data-pointer-mode="left" type="button" disabled>Left</button>
+                        <button class="pointer-mode-button" data-pointer-mode="right" type="button" disabled>Right</button>
+                        <button class="pointer-mode-button" data-pointer-mode="scroll" type="button" disabled>Scroll</button>
+                    </div>
+                    <p id="pointer-mode-hint" class="subtle-copy">Left: タップでクリック、ドラッグでドラッグ。</p>
+                </section>
+
+                <section class="drawer-section">
+                    <h3>Keys</h3>
+                    <div class="shortcut-grid">
+                        <button class="shortcut-button" data-key="Enter" type="button" disabled>Enter</button>
+                        <button class="shortcut-button" data-key="Tab" type="button" disabled>Tab</button>
+                        <button class="shortcut-button" data-key="Escape" type="button" disabled>Esc</button>
+                        <button class="shortcut-button" data-key="Backspace" type="button" disabled>BS</button>
+                        <button class="shortcut-button" data-key="Up" type="button" disabled>&#8593;</button>
+                        <button class="shortcut-button" data-key="Left" type="button" disabled>&#8592;</button>
+                        <button class="shortcut-button" data-key="Right" type="button" disabled>&#8594;</button>
+                        <button class="shortcut-button" data-key="Down" type="button" disabled>&#8595;</button>
+                        <button class="shortcut-button" data-key="Ctrl+C" type="button" disabled>Ctrl+C</button>
+                    </div>
+                </section>
+
+                <section class="drawer-section">
+                    <h3>Stream</h3>
+                    <div class="stream-mode-row">
+                        <button class="stream-mode-button active" data-stream-mode="low-latency" type="button">Speed</button>
+                        <button class="stream-mode-button" data-stream-mode="balanced" type="button">Balance</button>
+                        <button class="stream-mode-button" data-stream-mode="high-quality" type="button">Quality</button>
+                    </div>
+                    <p id="stream-mode-hint" class="subtle-copy">Speed: 低遅延優先。</p>
+                    <div class="fps-row">
+                        <label for="frame-rate-select">FPS</label>
+                        <select id="frame-rate-select" class="setting-select">
+                            <option value="15">15</option>
+                            <option value="30" selected>30</option>
+                            <option value="45">45</option>
+                            <option value="60">60</option>
+                        </select>
+                    </div>
+                </section>
+
+                <section class="drawer-section">
+                    <h3>Server</h3>
+                    <div class="meta-list">
+                        <div class="meta-row"><span class="meta-label">URLs</span><div id="server-url" class="meta-value">loading...</div></div>
+                        <div class="meta-row"><span class="meta-label">Networks</span><div id="vpn-addresses" class="meta-value">loading...</div></div>
+                        <div class="meta-row"><span class="meta-label">Token</span><div id="token-mode" class="meta-value">loading...</div></div>
+                    </div>
+                </section>
+            </div>
+
+            <div class="drawer-footer">
+                <button id="logout-button" class="ghost-button" type="button" hidden>Log out</button>
+            </div>
+        </aside>
+    </section>
+
+    <script src="/app.js" defer></script>
+</body>
+</html>
