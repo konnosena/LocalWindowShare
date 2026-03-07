@@ -19,5 +19,7 @@ internal interface IWebRtcStreamSessionFactory
 
     IReadOnlyList<WebRtcVideoCodecOption> SupportedVideoCodecOptions { get; }
 
+    WebRtcVideoCodecPreference NormalizeRequestedVideoCodecPreference(WebRtcVideoCodecPreference requestedPreference);
+
     IWebRtcStreamSession Create(WebRtcStreamSessionOptions options, IServiceProvider services);
 }

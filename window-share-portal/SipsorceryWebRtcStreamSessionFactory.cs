@@ -12,6 +12,11 @@ internal sealed class SipsorceryWebRtcStreamSessionFactory : IWebRtcStreamSessio
         new("av1", "AV1", false, "現在のサーバービルドでは未対応です。"),
     ];
 
+    public WebRtcVideoCodecPreference NormalizeRequestedVideoCodecPreference(WebRtcVideoCodecPreference requestedPreference)
+    {
+        return WebRtcVideoCodecPreferenceParser.NormalizeForSupportedOptions(requestedPreference, SupportedVideoCodecOptions);
+    }
+
     public IWebRtcStreamSession Create(WebRtcStreamSessionOptions options, IServiceProvider services)
     {
         var broker = services.GetRequiredService<WindowBroker>();

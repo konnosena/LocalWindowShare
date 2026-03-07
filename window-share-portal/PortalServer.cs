@@ -406,10 +406,18 @@ internal sealed class PortalServer : IAsyncDisposable
             var frameRate = ParseQueryInt32(context.Request.Query["frameRate"]) ?? 30;
             var maxWidth = ParseQueryInt32(context.Request.Query["maxWidth"]);
             var streamMode = StreamTuningModeParser.Parse(context.Request.Query["mode"]);
-            var videoCodecPreference = WebRtcVideoCodecPreferenceParser.Parse(context.Request.Query["codec"]);
+            var requestedVideoCodecPreference = WebRtcVideoCodecPreferenceParser.Parse(context.Request.Query["codec"]);
+            var videoCodecPreference = _webRtcStreamSessionFactory.NormalizeRequestedVideoCodecPreference(requestedVideoCodecPreference);
             if (maxWidth is <= 0)
             {
                 maxWidth = null;
+            }
+
+            if (videoCodecPreference != requestedVideoCodecPreference)
+            {
+                _logStore.AddWarning(
+                    "webrtc",
+                    $"Requested codec {requestedVideoCodecPreference.ToQueryValue()} is not supported by backend {_webRtcStreamSessionFactory.BackendName}. Falling back to {videoCodecPreference.ToQueryValue()}.");
             }
 
             using var socket = await context.WebSockets.AcceptWebSocketAsync();

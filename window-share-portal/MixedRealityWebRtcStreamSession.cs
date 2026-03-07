@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -10,6 +11,8 @@ using Microsoft.MixedReality.WebRTC;
 internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
 {
     private const int MaxSignalMessageBytes = 128 * 1024;
+    private static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(1.5);
+    private static readonly TimeSpan DeferredSourceDisposeTimeout = TimeSpan.FromSeconds(8);
     private static readonly JsonSerializerOptions SignalJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -37,6 +40,8 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
     private int _lastFrameHeight = 2;
     private int _captureFailureCount;
     private bool _firstFrameLogged;
+    private volatile bool _isStopping;
+    private int _activeFrameCallbacks;
 
     public MixedRealityWebRtcStreamSession(
         WindowBroker broker,
@@ -74,34 +79,105 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
         }
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
         _disposed = true;
+        _isStopping = true;
         _sessionCts.Cancel();
         _logger.LogInformation("Disposing libwebrtc session for HWND {Handle}.", _currentWindowHandle);
 
+        var peerConnection = _peerConnection;
+        var localVideoTrack = _localVideoTrack;
+        var videoSource = _videoSource;
+        _peerConnection = null;
+        _localVideoTrack = null;
+        _videoSource = null;
+
         try
         {
-            _peerConnection?.Close();
+            if (peerConnection is not null)
+            {
+                peerConnection.LocalSdpReadytoSend -= HandleLocalSdpReadyToSend;
+                peerConnection.IceCandidateReadytoSend -= HandleLocalIceCandidateReadyToSend;
+                peerConnection.IceStateChanged -= HandleIceStateChanged;
+                peerConnection.IceGatheringStateChanged -= HandleIceGatheringStateChanged;
+                peerConnection.Connected -= HandleConnected;
+                peerConnection.RenegotiationNeeded -= HandleRenegotiationNeeded;
+            }
         }
         catch
         {
         }
 
-        _localVideoTrack?.Dispose();
-        _localVideoTrack = null;
-        _videoSource?.Dispose();
-        _videoSource = null;
-        _peerConnection?.Dispose();
-        _peerConnection = null;
+        try
+        {
+            if (localVideoTrack is not null)
+            {
+                localVideoTrack.Enabled = false;
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            if (peerConnection is not null)
+            {
+                foreach (var transceiver in peerConnection.Transceivers.Where(transceiver => transceiver.MediaKind == MediaKind.Video))
+                {
+                    try
+                    {
+                        transceiver.LocalVideoTrack = null;
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            localVideoTrack?.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            peerConnection?.Dispose();
+        }
+        catch
+        {
+        }
+
+        if (await DrainVideoSourceUsageAsync(videoSource))
+        {
+            try
+            {
+                videoSource?.Dispose();
+            }
+            catch
+            {
+            }
+        }
+        else if (videoSource is not null)
+        {
+            ScheduleDeferredVideoSourceDisposal(videoSource, _currentWindowHandle, _logger);
+        }
+
         _socketSendLock.Dispose();
         _sessionCts.Dispose();
-        return ValueTask.CompletedTask;
     }
 
     private async Task InitializePeerConnectionAsync(CancellationToken cancellationToken)
@@ -111,6 +187,7 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
             Name = $"window-share-{_currentWindowHandle}",
             PreferredVideoCodec = MapPreferredVideoCodec(_requestedVideoCodecPreference),
         };
+        ApplyPreferredVideoCodecExtraParameters(peerConnection, _requestedVideoCodecPreference);
 
         peerConnection.LocalSdpReadytoSend += HandleLocalSdpReadyToSend;
         peerConnection.IceCandidateReadytoSend += HandleLocalIceCandidateReadyToSend;
@@ -338,8 +415,21 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
 
     private void HandleArgb32FrameRequest(in FrameRequest request)
     {
+        if (_isStopping || _disposed)
+        {
+            CompleteFrameRequestWithBlackFrame(request, _lastFrameWidth, _lastFrameHeight);
+            return;
+        }
+
+        Interlocked.Increment(ref _activeFrameCallbacks);
         try
         {
+            if (_isStopping || _disposed)
+            {
+                CompleteFrameRequestWithBlackFrame(request, _lastFrameWidth, _lastFrameHeight);
+                return;
+            }
+
             if (!TryCompleteFrameRequestWithCapture(request, out var message) && !string.IsNullOrWhiteSpace(message))
             {
                 _captureFailureCount++;
@@ -361,6 +451,10 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
                 _logger.LogWarning(ex, "libwebrtc frame callback failed for HWND {Handle}.", _currentWindowHandle);
             }
             CompleteFrameRequestWithBlackFrame(request, _lastFrameWidth, _lastFrameHeight);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeFrameCallbacks);
         }
     }
 
@@ -397,7 +491,7 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
                     data = bitmapData.Scan0,
                     stride = bitmapData.Stride,
                 };
-                request.Source.CompleteFrameRequest(request.RequestId, request.TimestampMs, in frame);
+                request.CompleteRequest(in frame);
                 if (!_firstFrameLogged)
                 {
                     _firstFrameLogged = true;
@@ -428,7 +522,7 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
                 data = handle.AddrOfPinnedObject(),
                 stride = safeWidth * 4,
             };
-            request.Source.CompleteFrameRequest(request.RequestId, request.TimestampMs, in frame);
+            request.CompleteRequest(in frame);
         }
         finally
         {
@@ -442,6 +536,14 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
         {
             try
             {
+                if (message.Type == SdpMessageType.Answer)
+                {
+                    _logger.LogInformation(
+                        "libwebrtc answer selected video codec {Codec} for HWND {Handle}.",
+                        DescribeNegotiatedVideoCodec(message.Content),
+                        _currentWindowHandle);
+                }
+
                 await SendSignalAsync(new
                 {
                     type = message.Type == SdpMessageType.Answer ? "answer" : "offer",
@@ -534,20 +636,9 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
     private void HandleIceStateChanged(IceConnectionState state)
     {
         _logger.LogInformation("libwebrtc ICE state changed to {State} for HWND {Handle}.", state, _currentWindowHandle);
-        if (state is IceConnectionState.Failed or IceConnectionState.Disconnected or IceConnectionState.Closed)
+        if (state is IceConnectionState.Failed or IceConnectionState.Closed)
         {
-            try
-            {
-                _peerConnection?.Close();
-            }
-            catch
-            {
-            }
-
-            if (state is IceConnectionState.Failed or IceConnectionState.Closed)
-            {
-                _sessionCts.Cancel();
-            }
+            _sessionCts.Cancel();
         }
     }
 
@@ -616,5 +707,140 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
             WebRtcVideoCodecPreference.VP9 => "VP9",
             _ => string.Empty,
         };
+    }
+
+    private static void ApplyPreferredVideoCodecExtraParameters(PeerConnection peerConnection, WebRtcVideoCodecPreference requestedPreference)
+    {
+        switch (requestedPreference)
+        {
+            case WebRtcVideoCodecPreference.VP9:
+                peerConnection.PreferredVideoCodecExtraParamsLocal = "profile-id=0";
+                peerConnection.PreferredVideoCodecExtraParamsRemote = "profile-id=0";
+                break;
+            default:
+                peerConnection.PreferredVideoCodecExtraParamsLocal = string.Empty;
+                peerConnection.PreferredVideoCodecExtraParamsRemote = string.Empty;
+                break;
+        }
+    }
+
+    private async Task<bool> DrainVideoSourceUsageAsync(VideoTrackSource? videoSource)
+    {
+        if (videoSource is null)
+        {
+            return true;
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < DisposeDrainTimeout)
+        {
+            var activeCallbacks = Volatile.Read(ref _activeFrameCallbacks);
+            var trackCount = 0;
+            try
+            {
+                trackCount = videoSource.Tracks.Count;
+            }
+            catch
+            {
+                break;
+            }
+
+            if (activeCallbacks == 0 && trackCount == 0)
+            {
+                return true;
+            }
+
+            await Task.Delay(25);
+        }
+
+        _logger.LogWarning(
+            "Timed out draining libwebrtc video source for HWND {Handle}. ActiveCallbacks={ActiveCallbacks}, RemainingTracks={TrackCount}.",
+            _currentWindowHandle,
+            Volatile.Read(ref _activeFrameCallbacks),
+            SafeGetTrackCount(videoSource));
+        return false;
+    }
+
+    private static int SafeGetTrackCount(VideoTrackSource videoSource)
+    {
+        try
+        {
+            return videoSource.Tracks.Count;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static void ScheduleDeferredVideoSourceDisposal(VideoTrackSource videoSource, long handle, ILogger logger)
+    {
+        WebRtcTaskUtilities.StartObservedBackgroundTask(async () =>
+        {
+            var deadline = Stopwatch.StartNew();
+            while (deadline.Elapsed < DeferredSourceDisposeTimeout)
+            {
+                if (SafeGetTrackCount(videoSource) == 0)
+                {
+                    videoSource.Dispose();
+                    logger.LogInformation("Disposed deferred libwebrtc video source for HWND {Handle}.", handle);
+                    return;
+                }
+
+                await Task.Delay(100);
+            }
+
+            logger.LogWarning(
+                "Skipping immediate disposal of libwebrtc video source for HWND {Handle}; track count stayed at {TrackCount}.",
+                handle,
+                SafeGetTrackCount(videoSource));
+        }, logger, "disposing deferred libwebrtc video source");
+    }
+
+    private static string DescribeNegotiatedVideoCodec(string? sdp)
+    {
+        if (string.IsNullOrWhiteSpace(sdp))
+        {
+            return "unknown";
+        }
+
+        var lines = sdp.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+        var videoLine = lines.FirstOrDefault(line => line.StartsWith("m=video ", StringComparison.OrdinalIgnoreCase));
+        if (videoLine is null)
+        {
+            return "unknown";
+        }
+
+        var tokens = videoLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 4)
+        {
+            return "unknown";
+        }
+
+        var payloadType = tokens[3];
+        var codecLine = lines
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.StartsWith($"a=rtpmap:{payloadType} ", StringComparison.OrdinalIgnoreCase));
+        if (codecLine is null)
+        {
+            return payloadType;
+        }
+
+        var codecName = codecLine[(codecLine.IndexOf(' ') + 1)..];
+        var slashIndex = codecName.IndexOf('/');
+        if (slashIndex >= 0)
+        {
+            codecName = codecName[..slashIndex];
+        }
+
+        var fmtpLine = lines
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.StartsWith($"a=fmtp:{payloadType} ", StringComparison.OrdinalIgnoreCase));
+        if (fmtpLine is null)
+        {
+            return codecName;
+        }
+
+        return $"{codecName} [{fmtpLine[(fmtpLine.IndexOf(' ') + 1)..]}]";
     }
 }

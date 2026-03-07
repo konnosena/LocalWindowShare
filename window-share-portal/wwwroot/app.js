@@ -8,6 +8,7 @@ const FRAME_SCALE_MIN = 1;
 const FRAME_SCALE_MAX = 4;
 const FRAME_RATE_OPTIONS = [15, 30, 45, 60];
 const DEFAULT_FRAME_RATE = 30;
+const WEBRTC_RECONNECT_COOLDOWN_MS = 180;
 const FRAME_RATE_STORAGE_KEY = "windowSharePortal.frameRate";
 const STREAM_MODE_OPTIONS = ["low-latency", "balanced", "high-quality"];
 const DEFAULT_STREAM_MODE = "balanced";
@@ -19,9 +20,9 @@ const FILTER_WT_STORAGE_KEY = "windowSharePortal.filterWindowsTerminal";
 const RESIZE_SCALE_STORAGE_KEY = "windowSharePortal.resizeScale";
 const LAST_WINDOW_STORAGE_KEY = "windowSharePortal.lastWindow";
 const DEFAULT_VIDEO_CODEC_UI_OPTIONS = Object.freeze([
-    { value: "auto", label: "Auto", available: true, hint: "利用可能な codec の中から最適なものを使います。" },
+    { value: "auto", label: "Auto", available: true, hint: "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。" },
     { value: "vp8", label: "VP8", available: true, hint: "互換性優先です。" },
-    { value: "vp9", label: "VP9", available: false, hint: "現在の送信ライブラリでは未対応です。" },
+    { value: "vp9", label: "VP9", available: true, hint: "高効率です。profile-id=0 を優先して接続します。" },
     { value: "av1", label: "AV1", available: false, hint: "現在のサーバービルドでは未対応です。" },
 ]);
 const FRAME_WIDTH_CAPS_BY_MODE = Object.freeze({
@@ -351,6 +352,7 @@ function renderStreamModeSelection() {
 function renderVideoCodecSelection() {
     const options = getVideoCodecUiOptions();
     const selectedValue = ensureSupportedVideoCodecPreference(state.videoCodecPreference, options);
+    const effectiveValue = resolveEffectiveVideoCodecPreference(selectedValue, options);
 
     for (const button of elements.videoCodecButtons) {
         const value = normalizeVideoCodecPreference(button.dataset.videoCodec);
@@ -369,7 +371,10 @@ function renderVideoCodecSelection() {
     }
 
     const selectedOption = options.find((option) => option.value === selectedValue) || options[0];
-    elements.videoCodecHint.textContent = `${selectedOption.label}: ${selectedOption.hint}`;
+    const effectiveSuffix = selectedValue === "auto"
+        ? ` 現在は ${videoCodecLabel(effectiveValue)} を使います。`
+        : "";
+    elements.videoCodecHint.textContent = `${selectedOption.label}: ${selectedOption.hint}${effectiveSuffix}`;
 }
 
 async function handleLogin(event) {
@@ -741,16 +746,22 @@ async function handleStreamModeChange(mode) {
         return;
     }
 
+    const previousRequestedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
+    const previousEffectiveCodec = resolveEffectiveVideoCodecPreference(previousRequestedCodec);
     state.streamMode = nextMode;
     renderStreamModeSelection();
+    renderVideoCodecSelection();
     saveStreamModePreference(nextMode);
-    elements.viewerStatus.textContent = `Stream mode: ${streamModeLabel(nextMode)}`;
+    const nextEffectiveCodec = resolveEffectiveVideoCodecPreference(previousRequestedCodec);
+    elements.viewerStatus.textContent = `Stream mode: ${streamModeLabel(nextMode)} · ${describeCodecPreference(previousRequestedCodec, nextEffectiveCodec)}`;
     if (state.selectedHandle && !state.pointerActive) {
-        await refreshFrameNow(true);
+        await refreshFrameNow(previousEffectiveCodec !== nextEffectiveCodec);
     }
 }
 
 async function handleVideoCodecChange(codec) {
+    const previousRequestedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
+    const previousEffectiveCodec = resolveEffectiveVideoCodecPreference(previousRequestedCodec);
     const nextCodec = ensureSupportedVideoCodecPreference(codec);
     if (nextCodec === state.videoCodecPreference) {
         renderVideoCodecSelection();
@@ -760,9 +771,10 @@ async function handleVideoCodecChange(codec) {
     state.videoCodecPreference = nextCodec;
     renderVideoCodecSelection();
     saveVideoCodecPreference(nextCodec);
-    elements.viewerStatus.textContent = `Codec preference: ${videoCodecLabel(nextCodec)}`;
+    const nextEffectiveCodec = resolveEffectiveVideoCodecPreference(nextCodec);
+    elements.viewerStatus.textContent = `Codec preference: ${describeCodecPreference(nextCodec, nextEffectiveCodec)}`;
     if (state.selectedHandle && !state.pointerActive) {
-        await refreshFrameNow(true);
+        await refreshFrameNow(previousEffectiveCodec !== nextEffectiveCodec);
     }
 }
 
@@ -914,7 +926,8 @@ async function ensureWebRtcSession(forceReconnect) {
     }
 
     const selectedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
-    const currentKey = `${state.frameRate}:${state.streamMode}:${selectedCodec}`;
+    const effectiveCodec = resolveEffectiveVideoCodecPreference(selectedCodec);
+    const currentKey = `${state.frameRate}:${state.streamMode}:${effectiveCodec}`;
     const isActive = state.webrtcConnected
         && state.peerConnection
         && state.signalingSocket
@@ -928,11 +941,15 @@ async function ensureWebRtcSession(forceReconnect) {
     }
 
     const requestedWidth = getRequestedFrameWidth();
+    const hadSession = Boolean(state.peerConnection || state.signalingSocket);
     await disconnectWebRtcSession({ clearVideo: forceReconnect });
-    await connectWebRtcSession(requestedWidth, currentKey, selectedCodec);
+    if (hadSession) {
+        await wait(WEBRTC_RECONNECT_COOLDOWN_MS);
+    }
+    await connectWebRtcSession(requestedWidth, currentKey, selectedCodec, effectiveCodec);
 }
 
-async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec) {
+async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec, effectiveCodec) {
     if (!state.selectedHandle) {
         return;
     }
@@ -942,20 +959,21 @@ async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec) {
         frameRate: state.frameRate,
         maxWidth: requestedWidth,
         streamMode: state.streamMode,
-        codec: selectedCodec,
+        requestedCodec: selectedCodec,
+        effectiveCodec,
     });
 
     const generation = ++state.webrtcGeneration;
     const peerConnection = new RTCPeerConnection({
         iceServers: [],
     });
-    const signalingSocket = new WebSocket(buildWebRtcUrl(state.selectedHandle, requestedWidth, state.frameRate, state.streamMode, selectedCodec));
+    const signalingSocket = new WebSocket(buildWebRtcUrl(state.selectedHandle, requestedWidth, state.frameRate, state.streamMode, effectiveCodec));
     const pendingRemoteIceCandidates = [];
     let remoteDescriptionApplied = false;
     let signalingMessageChain = Promise.resolve();
     const videoTransceiver = peerConnection.addTransceiver("video", { direction: "recvonly" });
     configureReceiverForCurrentMode(videoTransceiver.receiver);
-    applyVideoCodecPreference(videoTransceiver, selectedCodec);
+    applyVideoCodecPreference(videoTransceiver, effectiveCodec, selectedCodec);
 
     peerConnection.__streamKey = streamKey;
     state.peerConnection = peerConnection;
@@ -963,7 +981,7 @@ async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec) {
     state.webrtcConnected = false;
     state.activeStreamHandle = state.selectedHandle;
     state.activeStreamMaxWidth = requestedWidth;
-    elements.viewerStatus.textContent = `WebRTC connecting... ${state.frameRate} fps · ${videoCodecLabel(selectedCodec)} pref`;
+    elements.viewerStatus.textContent = `WebRTC connecting... ${state.frameRate} fps · ${describeCodecPreference(selectedCodec, effectiveCodec)}`;
     elements.framePlaceholder.hidden = false;
     elements.framePlaceholder.textContent = "WebRTC stream connecting...";
     elements.windowFrame.hidden = true;
@@ -1178,7 +1196,7 @@ async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec) {
                 state.webrtcConnected = true;
                 elements.windowFrame.hidden = false;
                 elements.framePlaceholder.hidden = true;
-                elements.viewerStatus.textContent = `WebRTC live · ${state.frameRate} fps · ${streamModeLabel(state.streamMode)} · ${videoCodecLabel(selectedCodec)} pref`;
+                elements.viewerStatus.textContent = `WebRTC live · ${state.frameRate} fps · ${streamModeLabel(state.streamMode)} · ${describeCodecPreference(selectedCodec, effectiveCodec)}`;
                 updateFrameCursor(state.cursorRatio ?? { x: 0.5, y: 0.5 }, { style: cursorStyleForCurrentState(), pressed: isPressedCursor() });
                 syncFrameTransform();
                 resolveOnce();
@@ -1289,7 +1307,7 @@ function configureReceiverForCurrentMode(receiver) {
     }
 }
 
-function applyVideoCodecPreference(transceiver, codecPreference) {
+function applyVideoCodecPreference(transceiver, codecPreference, requestedCodecPreference = codecPreference) {
     if (!transceiver || typeof transceiver.setCodecPreferences !== "function" || !window.RTCRtpReceiver || typeof RTCRtpReceiver.getCapabilities !== "function") {
         return;
     }
@@ -1311,7 +1329,7 @@ function applyVideoCodecPreference(transceiver, codecPreference) {
     const fallback = [];
     for (const codec of codecs) {
         const mimeType = typeof codec?.mimeType === "string" ? codec.mimeType.toLowerCase() : "";
-        if (preferredToken && mimeType.includes(preferredToken)) {
+        if (preferredToken && codecMatchesPreference(codec, preferredToken)) {
             preferred.push(codec);
         } else if (supportedServerCodecs.some((value) => mimeType.includes(value))) {
             fallback.push(codec);
@@ -1324,16 +1342,59 @@ function applyVideoCodecPreference(transceiver, codecPreference) {
     try {
         transceiver.setCodecPreferences(ordered);
         logClientEvent("info", "Applied video codec preference.", {
-            requested: codecPreference,
+            requested: requestedCodecPreference,
+            effective: codecPreference,
             preferredCount: preferred.length,
-            codecOrder: ordered.map((codec) => codec?.mimeType || null),
+            codecOrder: ordered.map((codec) => ({
+                mimeType: codec?.mimeType || null,
+                fmtp: codec?.sdpFmtpLine || null,
+            })),
         });
     } catch (error) {
         logClientEvent("warning", "Failed to apply video codec preference.", {
-            requested: codecPreference,
+            requested: requestedCodecPreference,
+            effective: codecPreference,
             message: error?.message || String(error),
         });
     }
+}
+
+function codecMatchesPreference(codec, codecPreference) {
+    const mimeType = typeof codec?.mimeType === "string" ? codec.mimeType.toLowerCase() : "";
+    if (!mimeType.includes(codecPreference)) {
+        return false;
+    }
+
+    if (codecPreference !== "vp9") {
+        return true;
+    }
+
+    const fmtp = typeof codec?.sdpFmtpLine === "string" ? codec.sdpFmtpLine.toLowerCase() : "";
+    return fmtp.length === 0 || fmtp.includes("profile-id=0");
+}
+
+function resolveEffectiveVideoCodecPreference(codecPreference, options = getVideoCodecUiOptions()) {
+    const normalized = ensureSupportedVideoCodecPreference(codecPreference, options);
+    if (normalized !== "auto") {
+        return normalized;
+    }
+
+    const vp9Available = options.some((option) => option.value === "vp9" && option.available !== false);
+    if (!vp9Available) {
+        return "vp8";
+    }
+
+    if (state.streamMode === "low-latency") {
+        return "vp8";
+    }
+
+    return state.frameRate <= 30 ? "vp9" : "vp8";
+}
+
+function describeCodecPreference(requestedCodec, effectiveCodec) {
+    return requestedCodec === "auto"
+        ? `Auto→${videoCodecLabel(effectiveCodec)}`
+        : videoCodecLabel(effectiveCodec);
 }
 
 function buildWebRtcUrl(handle, maxWidth, frameRate, streamMode, codecPreference) {
@@ -1448,12 +1509,16 @@ function handleFrameRateChange(event) {
         return;
     }
 
+    const previousRequestedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
+    const previousEffectiveCodec = resolveEffectiveVideoCodecPreference(previousRequestedCodec);
     state.frameRate = nextRate;
     renderFrameRateSelection();
+    renderVideoCodecSelection();
     saveFrameRatePreference(nextRate);
-    elements.viewerStatus.textContent = `Frame rate: ${nextRate} fps`;
+    const nextEffectiveCodec = resolveEffectiveVideoCodecPreference(previousRequestedCodec);
+    elements.viewerStatus.textContent = `Frame rate: ${nextRate} fps · ${describeCodecPreference(previousRequestedCodec, nextEffectiveCodec)}`;
     if (state.selectedHandle && !state.pointerActive) {
-        refreshFrameNow(true).catch(showTransientError);
+        refreshFrameNow(previousEffectiveCodec !== nextEffectiveCodec).catch(showTransientError);
     }
 }
 
@@ -2628,6 +2693,10 @@ function syncDrawerState(immediate = false) {
     if (immediate && !state.drawerOpen) {
         elements.workspace.classList.remove("drawer-open");
     }
+}
+
+function wait(milliseconds) {
+    return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, milliseconds)));
 }
 
 async function waitForIceGatheringComplete(peerConnection) {
