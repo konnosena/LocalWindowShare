@@ -32,13 +32,31 @@ internal static class WebRtcVideoCodecPreferenceParser
         };
     }
 
+    public static WebRtcVideoCodecPreference NormalizeForSupportedOptions(
+        WebRtcVideoCodecPreference requestedPreference,
+        IReadOnlyList<WebRtcVideoCodecOption> options,
+        WebRtcVideoCodecPreference fallback = WebRtcVideoCodecPreference.Auto)
+    {
+        if (requestedPreference == WebRtcVideoCodecPreference.Auto)
+        {
+            return WebRtcVideoCodecPreference.Auto;
+        }
+
+        var requestedValue = requestedPreference.ToQueryValue();
+        var supported = options.Any(option =>
+            option.Available &&
+            string.Equals(option.Value, requestedValue, StringComparison.OrdinalIgnoreCase));
+
+        return supported ? requestedPreference : fallback;
+    }
+
     public static IReadOnlyList<WebRtcVideoCodecOption> GetUiOptions()
     {
         return
         [
-            new("auto", "Auto", true, "利用可能な codec の中から最適なものを使います。"),
+            new("auto", "Auto", true, "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。"),
             new("vp8", "VP8", true, "互換性優先です。"),
-            new("vp9", "VP9", false, "現在の送信ライブラリでは未対応です。"),
+            new("vp9", "VP9", true, "高効率です。profile-id=0 を優先して接続します。"),
             new("av1", "AV1", false, "現在のサーバービルドでは未対応です。"),
         ];
     }
