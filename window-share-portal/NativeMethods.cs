@@ -12,6 +12,11 @@ internal static class NativeMethods
     internal const int DWMWA_CLOAKED = 14;
     internal const int SW_SHOW = 5;
     internal const int SW_RESTORE = 9;
+    internal static readonly nint HWND_TOPMOST = new(-1);
+    internal static readonly nint HWND_NOTOPMOST = new(-2);
+    internal const uint SWP_NOSIZE = 0x0001;
+    internal const uint SWP_NOMOVE = 0x0002;
+    internal const uint SWP_SHOWWINDOW = 0x0040;
 
     internal const ushort VK_BACK = 0x08;
     internal const ushort VK_TAB = 0x09;
@@ -69,7 +74,13 @@ internal static class NativeMethods
     internal static extern bool SetForegroundWindow(nint windowHandle);
 
     [DllImport("user32.dll")]
+    internal static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
     internal static extern bool BringWindowToTop(nint windowHandle);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool SetWindowPos(nint windowHandle, nint insertAfter, int x, int y, int cx, int cy, uint flags);
 
     [DllImport("user32.dll")]
     internal static extern nint GetForegroundWindow();
@@ -91,6 +102,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(nint windowHandle, ref int processId);
+
+    [DllImport("kernel32.dll")]
+    internal static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
     internal static extern bool GetWindowRect(nint windowHandle, out RECT rect);

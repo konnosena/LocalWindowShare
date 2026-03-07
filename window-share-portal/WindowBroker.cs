@@ -4,6 +4,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Forms;
 
 internal sealed class WindowBroker
 {
@@ -46,6 +47,8 @@ internal sealed class WindowBroker
         {
             return false;
         }
+
+        EnsureWindowVisibleForScreenCapture(windowHandle, ref summary);
 
         if (summary.IsMinimized)
         {
@@ -90,6 +93,8 @@ internal sealed class WindowBroker
             return false;
         }
 
+        EnsureWindowVisibleForScreenCapture(windowHandle, ref summary);
+
         if (summary.IsMinimized)
         {
             message = "The window is minimized. Restore it before streaming.";
@@ -124,7 +129,7 @@ internal sealed class WindowBroker
     {
         if (!TryResolveWindow(handle, out var windowHandle, out var summary, out var message, out var statusCode))
         {
-            return new ResizeResult(new OperationError(statusCode, message), default);
+            return new ResizeResult(new OperationError(statusCode, message), default, default);
         }
 
         var previousBounds = summary.Bounds;
@@ -135,9 +140,24 @@ internal sealed class WindowBroker
         }
 
         NativeMethods.GetWindowRect(windowHandle, out var rect);
-        NativeMethods.MoveWindow(windowHandle, rect.Left, rect.Top, width, height, true);
+        var currentBounds = rect.ToRectangle();
+        if (currentBounds.Width <= 0 || currentBounds.Height <= 0)
+        {
+            currentBounds = previousBounds.ToRectangle();
+        }
 
-        return new ResizeResult(null, previousBounds);
+        var workingArea = GetWorkingAreaForWindow(windowHandle, currentBounds);
+        var targetBounds = GetAdjustedResizeBounds(currentBounds, new Size(width, height), workingArea);
+        NativeMethods.MoveWindow(windowHandle, targetBounds.Left, targetBounds.Top, targetBounds.Width, targetBounds.Height, true);
+
+        NativeMethods.GetWindowRect(windowHandle, out var appliedRect);
+        var appliedBounds = appliedRect.ToRectangle();
+        if (appliedBounds.Width <= 0 || appliedBounds.Height <= 0)
+        {
+            appliedBounds = targetBounds;
+        }
+
+        return new ResizeResult(null, previousBounds, ToWindowBounds(appliedBounds));
     }
 
     public OperationError? ActivateWindow(long handle)
@@ -146,6 +166,8 @@ internal sealed class WindowBroker
         {
             return new OperationError(statusCode, message);
         }
+
+        EnsureWindowVisibleForScreenCapture(windowHandle);
 
         if (NativeMethods.IsIconic(windowHandle))
         {
@@ -157,7 +179,7 @@ internal sealed class WindowBroker
         }
 
         NativeMethods.BringWindowToTop(windowHandle);
-        var success = NativeMethods.SetForegroundWindow(windowHandle);
+        var success = TryBringWindowToForeground(windowHandle);
         var foregroundHandle = NativeMethods.GetForegroundWindow();
         if (!success && foregroundHandle != windowHandle)
         {
@@ -493,6 +515,183 @@ internal sealed class WindowBroker
         }
 
         return bitmap;
+    }
+
+    private static bool TryBringWindowToForeground(nint windowHandle)
+    {
+        if (NativeMethods.SetForegroundWindow(windowHandle) || NativeMethods.GetForegroundWindow() == windowHandle)
+        {
+            return true;
+        }
+
+        var currentThreadId = NativeMethods.GetCurrentThreadId();
+        var foregroundWindow = NativeMethods.GetForegroundWindow();
+        var foregroundProcessId = 0;
+        var targetProcessId = 0;
+        var foregroundThreadId = foregroundWindow == nint.Zero
+            ? 0
+            : NativeMethods.GetWindowThreadProcessId(foregroundWindow, ref foregroundProcessId);
+        var targetThreadId = NativeMethods.GetWindowThreadProcessId(windowHandle, ref targetProcessId);
+
+        var foregroundAttached = false;
+        var targetAttached = false;
+        try
+        {
+            if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId)
+            {
+                foregroundAttached = NativeMethods.AttachThreadInput(currentThreadId, foregroundThreadId, true);
+            }
+
+            if (targetThreadId != 0 && targetThreadId != currentThreadId)
+            {
+                targetAttached = NativeMethods.AttachThreadInput(currentThreadId, targetThreadId, true);
+            }
+
+            NativeMethods.BringWindowToTop(windowHandle);
+            if (NativeMethods.SetForegroundWindow(windowHandle) || NativeMethods.GetForegroundWindow() == windowHandle)
+            {
+                return true;
+            }
+
+            NativeMethods.SetWindowPos(windowHandle, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_SHOWWINDOW);
+            NativeMethods.SetWindowPos(windowHandle, NativeMethods.HWND_NOTOPMOST, 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_SHOWWINDOW);
+            NativeMethods.BringWindowToTop(windowHandle);
+            return NativeMethods.SetForegroundWindow(windowHandle) || NativeMethods.GetForegroundWindow() == windowHandle;
+        }
+        finally
+        {
+            if (targetAttached)
+            {
+                NativeMethods.AttachThreadInput(currentThreadId, targetThreadId, false);
+            }
+
+            if (foregroundAttached)
+            {
+                NativeMethods.AttachThreadInput(currentThreadId, foregroundThreadId, false);
+            }
+        }
+    }
+
+    private static void EnsureWindowVisibleForScreenCapture(nint windowHandle, ref WindowSummary summary)
+    {
+        EnsureWindowVisibleForScreenCapture(windowHandle);
+        if (TryBuildWindowSummary(windowHandle, out var refreshedSummary))
+        {
+            summary = refreshedSummary;
+        }
+    }
+
+    private static void EnsureWindowVisibleForScreenCapture(nint windowHandle)
+    {
+        NativeMethods.GetWindowRect(windowHandle, out var rect);
+        var bounds = rect.ToRectangle();
+        if (bounds.Width <= 0 || bounds.Height <= 0 || IsFullyOnVirtualScreen(bounds))
+        {
+            return;
+        }
+
+        var virtualBounds = GetVirtualScreenBounds();
+        var nextLeft = bounds.Left;
+        var nextTop = bounds.Top;
+
+        if (bounds.Left < virtualBounds.Left)
+        {
+            nextLeft = virtualBounds.Left;
+        }
+        else if (bounds.Right > virtualBounds.Right)
+        {
+            nextLeft = Math.Max(virtualBounds.Left, virtualBounds.Right - bounds.Width);
+        }
+
+        if (bounds.Top < virtualBounds.Top)
+        {
+            nextTop = virtualBounds.Top;
+        }
+        else if (bounds.Bottom > virtualBounds.Bottom)
+        {
+            nextTop = Math.Max(virtualBounds.Top, virtualBounds.Bottom - bounds.Height);
+        }
+
+        if (nextLeft != bounds.Left || nextTop != bounds.Top)
+        {
+            NativeMethods.MoveWindow(windowHandle, nextLeft, nextTop, bounds.Width, bounds.Height, true);
+        }
+    }
+
+    private static Rectangle GetAdjustedResizeBounds(Rectangle currentBounds, Size requestedSize, Rectangle workingArea)
+    {
+        var fittedSize = FitSizeWithinBounds(requestedSize, workingArea.Size);
+        var nextLeft = currentBounds.Left;
+        var nextTop = currentBounds.Top;
+
+        if (nextLeft < workingArea.Left)
+        {
+            nextLeft = workingArea.Left;
+        }
+        else if (nextLeft + fittedSize.Width > workingArea.Right)
+        {
+            nextLeft = Math.Max(workingArea.Left, workingArea.Right - fittedSize.Width);
+        }
+
+        if (nextTop < workingArea.Top)
+        {
+            nextTop = workingArea.Top;
+        }
+        else if (nextTop + fittedSize.Height > workingArea.Bottom)
+        {
+            nextTop = Math.Max(workingArea.Top, workingArea.Bottom - fittedSize.Height);
+        }
+
+        return new Rectangle(nextLeft, nextTop, fittedSize.Width, fittedSize.Height);
+    }
+
+    private static Size FitSizeWithinBounds(Size requestedSize, Size maxSize)
+    {
+        var requestedWidth = Math.Max(requestedSize.Width, 1);
+        var requestedHeight = Math.Max(requestedSize.Height, 1);
+        var maxWidth = Math.Max(maxSize.Width, 1);
+        var maxHeight = Math.Max(maxSize.Height, 1);
+
+        if (requestedWidth <= maxWidth && requestedHeight <= maxHeight)
+        {
+            return new Size(requestedWidth, requestedHeight);
+        }
+
+        var scale = Math.Min((double)maxWidth / requestedWidth, (double)maxHeight / requestedHeight);
+        var width = Math.Max(1, (int)Math.Floor(requestedWidth * scale));
+        var height = Math.Max(1, (int)Math.Floor(requestedHeight * scale));
+        return new Size(Math.Min(width, maxWidth), Math.Min(height, maxHeight));
+    }
+
+    private static Rectangle GetWorkingAreaForWindow(nint windowHandle, Rectangle bounds)
+    {
+        var screen = bounds.Width > 0 && bounds.Height > 0
+            ? Screen.FromRectangle(bounds)
+            : Screen.FromHandle(windowHandle);
+
+        var workingArea = screen.WorkingArea;
+        return workingArea.Width > 0 && workingArea.Height > 0
+            ? workingArea
+            : screen.Bounds;
+    }
+
+    private static WindowBounds ToWindowBounds(Rectangle bounds)
+    {
+        return new WindowBounds(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+    }
+
+    private static bool IsFullyOnVirtualScreen(Rectangle bounds)
+    {
+        return GetVirtualScreenBounds().Contains(bounds);
+    }
+
+    private static Rectangle GetVirtualScreenBounds()
+    {
+        var virtualLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
+        var virtualTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
+        var virtualWidth = Math.Max(NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN), 1);
+        var virtualHeight = Math.Max(NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN), 1);
+        return new Rectangle(virtualLeft, virtualTop, virtualWidth, virtualHeight);
     }
 
     private static bool ShouldPreferScreenCapture(WindowSummary summary)
