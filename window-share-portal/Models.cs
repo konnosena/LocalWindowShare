@@ -16,7 +16,9 @@ internal sealed record WebRtcSignalMessage(
     string? Sdp,
     string? Candidate,
     string? SdpMid,
-    int? SdpMLineIndex);
+    int? SdpMLineIndex,
+    long? Handle,
+    int? MaxWidth);
 
 internal sealed record ClientLogRequest(string? Level, string? Source, string? Message, JsonElement? Context);
 

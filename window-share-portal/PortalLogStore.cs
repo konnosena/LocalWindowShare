@@ -5,11 +5,13 @@ internal sealed class PortalLogStore
     private readonly object _sync = new();
     private readonly int _capacity;
     private readonly List<PortalLogEntry> _entries = new();
+    private readonly PortalFileLogWriter? _fileLogWriter;
     private long _nextSequenceId = 1;
 
-    public PortalLogStore(int capacity = 200)
+    public PortalLogStore(int capacity = 200, PortalFileLogWriter? fileLogWriter = null)
     {
         _capacity = Math.Max(50, capacity);
+        _fileLogWriter = fileLogWriter;
     }
 
     public long LastSequenceId
@@ -46,14 +48,18 @@ internal sealed class PortalLogStore
             return;
         }
 
+        var timestamp = DateTimeOffset.UtcNow;
+        var normalizedSource = NormalizeSource(source);
+        var trimmedMessage = message.Trim();
+
         lock (_sync)
         {
             _entries.Add(new PortalLogEntry(
                 _nextSequenceId++,
-                DateTimeOffset.UtcNow,
+                timestamp,
                 level.ToString(),
-                NormalizeSource(source),
-                message.Trim()));
+                normalizedSource,
+                trimmedMessage));
 
             var overflow = _entries.Count - _capacity;
             if (overflow > 0)
@@ -61,6 +67,8 @@ internal sealed class PortalLogStore
                 _entries.RemoveRange(0, overflow);
             }
         }
+
+        _fileLogWriter?.Write(timestamp, level.ToString(), normalizedSource, trimmedMessage);
     }
 
     public void AddInformation(string source, string message) => Add(LogLevel.Information, source, message);

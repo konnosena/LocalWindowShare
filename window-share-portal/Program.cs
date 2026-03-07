@@ -13,9 +13,11 @@ internal static class Program
         var settings = settingsStore.Load(Environment.GetEnvironmentVariable("WINDOW_SHARE_PORTAL_TOKEN"), listenPort);
         var runtimeState = new PortalRuntimeState(settings, settingsStore);
         var connectionTracker = new ClientConnectionTracker();
-        var logStore = new PortalLogStore();
+        using var fileLogWriter = new PortalFileLogWriter(contentRoot);
+        var logStore = new PortalLogStore(fileLogWriter: fileLogWriter);
         var sessionStore = new PortalSessionStore();
         var server = new PortalServer(args, contentRoot, runtimeState, connectionTracker, logStore, sessionStore);
+        RegisterGlobalExceptionLogging(logStore);
 
         try
         {
@@ -23,10 +25,42 @@ internal static class Program
             Application.Run(form);
             return 0;
         }
+        catch (Exception exception)
+        {
+            logStore.AddError("fatal", $"Application terminated unexpectedly.{Environment.NewLine}{exception}");
+            return 1;
+        }
         finally
         {
             server.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
+    }
+
+    private static void RegisterGlobalExceptionLogging(PortalLogStore logStore)
+    {
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, eventArgs) =>
+        {
+            logStore.AddError("winforms", $"Unhandled UI exception.{Environment.NewLine}{eventArgs.Exception}");
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
+        {
+            if (eventArgs.ExceptionObject is Exception exception)
+            {
+                logStore.AddError("appdomain", $"Unhandled exception. IsTerminating={eventArgs.IsTerminating}.{Environment.NewLine}{exception}");
+            }
+            else
+            {
+                logStore.AddError("appdomain", $"Unhandled non-exception object. IsTerminating={eventArgs.IsTerminating}. Value={eventArgs.ExceptionObject}");
+            }
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, eventArgs) =>
+        {
+            logStore.AddError("tasks", $"Unobserved task exception.{Environment.NewLine}{eventArgs.Exception}");
+            eventArgs.SetObserved();
+        };
     }
 
     private static int ResolveListenPort()
