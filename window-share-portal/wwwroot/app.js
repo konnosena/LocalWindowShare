@@ -16,6 +16,7 @@ const VIDEO_CODEC_OPTIONS = ["auto", "vp8", "vp9", "av1"];
 const DEFAULT_VIDEO_CODEC = "auto";
 const VIDEO_CODEC_STORAGE_KEY = "windowSharePortal.videoCodec";
 const FILTER_WT_STORAGE_KEY = "windowSharePortal.filterWindowsTerminal";
+const RESIZE_SCALE_STORAGE_KEY = "windowSharePortal.resizeScale";
 const DEFAULT_VIDEO_CODEC_UI_OPTIONS = Object.freeze([
     { value: "auto", label: "Auto", available: true, hint: "利用可能な codec の中から最適なものを使います。" },
     { value: "vp8", label: "VP8", available: true, hint: "互換性優先です。" },
@@ -91,6 +92,7 @@ const state = {
     filterWindowsTerminal: loadFilterWtPreference(),
     savedWindowBounds: null,
     resizeBusy: false,
+    resizeScale: loadResizeScalePreference(),
 };
 
 const elements = {
@@ -130,6 +132,7 @@ const elements = {
     quickKeyButtons: Array.from(document.querySelectorAll(".quick-key-button")),
     scrollPad: document.getElementById("scroll-pad"),
     filterWtCheckbox: document.getElementById("filter-wt-checkbox"),
+    resizeScaleSelect: document.getElementById("resize-scale-select"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -184,6 +187,7 @@ function bindEvents() {
         handleSendText(event).catch(showTransientError);
     });
     elements.frameRateSelect.addEventListener("change", handleFrameRateChange);
+    elements.resizeScaleSelect.addEventListener("change", handleResizeScaleChange);
     for (const button of elements.streamModeButtons) {
         button.addEventListener("click", () => {
             handleStreamModeChange(button.dataset.streamMode).catch(showTransientError);
@@ -283,6 +287,7 @@ async function showWorkspace() {
     renderFrameRateSelection();
     renderStreamModeSelection();
     renderVideoCodecSelection();
+    renderResizeScaleSelection();
     renderServerInfo();
     closeDrawer(true);
     await refreshWindows(false);
@@ -428,13 +433,14 @@ async function _doToggleMobileResize() {
         state.savedWindowBounds = null;
         elements.viewerStatus.textContent = formatResizeStatus("Restored", result.appliedBounds || bounds, bounds);
     } else {
+        const scale = state.resizeScale;
         const stageRect = elements.frameStage.getBoundingClientRect();
         const headerHeight = 44;
         const scrollRailWidth = 32;
         const availableWidth = Math.floor(stageRect.width - scrollRailWidth);
         const availableHeight = Math.floor(stageRect.height - headerHeight);
-        const targetWidth = Math.max(900, Math.min(availableWidth, 1800));
-        const targetHeight = Math.max(1200, Math.min(availableHeight, 3600));
+        const targetWidth = Math.max(Math.floor(300 * scale), Math.min(availableWidth, Math.floor(600 * scale)));
+        const targetHeight = Math.max(Math.floor(400 * scale), Math.min(availableHeight, Math.floor(1200 * scale)));
 
         const response = await fetch(`/api/windows/${state.selectedHandle}/resize`, {
             method: "POST",
@@ -1540,6 +1546,34 @@ function saveFilterWtPreference(value) {
         window.localStorage.setItem(FILTER_WT_STORAGE_KEY, value ? "true" : "false");
     } catch {
     }
+}
+
+function loadResizeScalePreference() {
+    try {
+        const stored = Number(window.localStorage.getItem(RESIZE_SCALE_STORAGE_KEY));
+        return [1, 1.5, 2, 3, 4].includes(stored) ? stored : 3;
+    } catch {
+        return 3;
+    }
+}
+
+function saveResizeScalePreference(value) {
+    try {
+        window.localStorage.setItem(RESIZE_SCALE_STORAGE_KEY, String(value));
+    } catch {
+    }
+}
+
+function renderResizeScaleSelection() {
+    if (elements.resizeScaleSelect) {
+        elements.resizeScaleSelect.value = String(state.resizeScale);
+    }
+}
+
+function handleResizeScaleChange() {
+    const value = Number(elements.resizeScaleSelect.value);
+    state.resizeScale = value;
+    saveResizeScalePreference(value);
 }
 
 async function handleFramePointerDown(event) {
