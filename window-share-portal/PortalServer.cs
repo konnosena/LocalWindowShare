@@ -216,9 +216,9 @@ internal sealed class PortalServer : IAsyncDisposable
             var level = ParseClientLogLevel(request.Level);
             var source = string.IsNullOrWhiteSpace(request.Source) ? "browser" : request.Source.Trim();
             var message = string.IsNullOrWhiteSpace(request.Message) ? "(empty client log)" : request.Message.Trim();
-            if (request.Context is JsonElement context && context.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+            if (request.Context is JsonElement requestContext && requestContext.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
             {
-                message = $"{message} | context={context.GetRawText()}";
+                message = $"{message} | context={requestContext.GetRawText()}";
             }
 
             logStore.Add(level, source, message);
@@ -232,6 +232,7 @@ internal sealed class PortalServer : IAsyncDisposable
             listenUrls = _runtimeState.ListenUrls,
             allowedAddresses = _runtimeState.AllowedAddressLabels,
             allowedNetworks = _runtimeState.AllowedNetworkLabels,
+            videoCodecOptions = WebRtcVideoCodecPreferenceParser.GetUiOptions(),
             tokenModeLabel = _runtimeState.TokenModeLabel,
             hasCustomToken = !string.Equals(_runtimeState.TokenModeLabel, "Generated at first launch", StringComparison.Ordinal),
             limitations = new[]
@@ -266,6 +267,32 @@ internal sealed class PortalServer : IAsyncDisposable
             context.Response.Headers.Append("X-Window-Width", frame.Width.ToString());
             context.Response.Headers.Append("X-Window-Height", frame.Height.ToString());
             return Results.File(frame.ImageBytes, frame.ContentType);
+        });
+
+        app.MapPost("/api/windows/{handle:long}/resize", (long handle, ResizeWindowRequest request, WindowBroker broker) =>
+        {
+            if (request.Width < 200 || request.Height < 200 || request.Width > 7680 || request.Height > 4320)
+            {
+                return Results.Json(new { message = "Width and height must be between 200 and 7680/4320." }, statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            var result = broker.ResizeWindow(handle, request.Width, request.Height);
+            if (result.Error is not null)
+            {
+                return Results.Json(new { message = result.Error.Message }, statusCode: result.Error.StatusCode);
+            }
+
+            return Results.Ok(new
+            {
+                ok = true,
+                previousBounds = new
+                {
+                    left = result.PreviousBounds.Left,
+                    top = result.PreviousBounds.Top,
+                    width = result.PreviousBounds.Width,
+                    height = result.PreviousBounds.Height,
+                },
+            });
         });
 
         app.MapPost("/api/windows/{handle:long}/activate", (long handle, WindowBroker broker) =>
@@ -308,6 +335,38 @@ internal sealed class PortalServer : IAsyncDisposable
                 : Results.Json(new { message = error.Message }, statusCode: error.StatusCode);
         });
 
+        app.MapPost("/api/launch", (LaunchAppRequest request, PortalLogStore logStore) =>
+        {
+            var allowed = new Dictionary<string, (string FileName, string? Arguments)>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["explorer"] = ("explorer.exe", null),
+                ["cmd"] = ("cmd.exe", null),
+            };
+
+            if (!allowed.TryGetValue(request.App ?? "", out var entry))
+            {
+                return Results.Json(new { message = $"Unknown app: {request.App}" }, statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            try
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = entry.FileName,
+                    Arguments = entry.Arguments ?? "",
+                    UseShellExecute = true,
+                };
+                System.Diagnostics.Process.Start(startInfo);
+                logStore.AddInformation("launch", $"Launched {entry.FileName}.");
+                return Results.Ok(new { ok = true, app = request.App });
+            }
+            catch (Exception ex)
+            {
+                logStore.AddInformation("launch", $"Failed to launch {entry.FileName}: {ex.Message}");
+                return Results.Json(new { message = $"Failed to launch {entry.FileName}: {ex.Message}" }, statusCode: StatusCodes.Status500InternalServerError);
+            }
+        });
+
         app.Map("/ws/webrtc", async context =>
         {
             if (!context.WebSockets.IsWebSocketRequest)
@@ -334,6 +393,7 @@ internal sealed class PortalServer : IAsyncDisposable
             var frameRate = ParseQueryInt32(context.Request.Query["frameRate"]) ?? 30;
             var maxWidth = ParseQueryInt32(context.Request.Query["maxWidth"]);
             var streamMode = StreamTuningModeParser.Parse(context.Request.Query["mode"]);
+            var videoCodecPreference = WebRtcVideoCodecPreferenceParser.Parse(context.Request.Query["codec"]);
             if (maxWidth is <= 0)
             {
                 maxWidth = null;
@@ -342,8 +402,8 @@ internal sealed class PortalServer : IAsyncDisposable
             using var socket = await context.WebSockets.AcceptWebSocketAsync();
             var broker = context.RequestServices.GetRequiredService<WindowBroker>();
             var logger = context.RequestServices.GetRequiredService<ILogger<WebRtcWindowStreamSession>>();
-            _logStore.AddInformation("webrtc", $"Accepted signaling socket for HWND {handle.Value}, {frameRate} fps, maxWidth={maxWidth?.ToString() ?? "auto"}, mode={streamMode.ToQueryValue()}.");
-            await using var session = new WebRtcWindowStreamSession(broker, handle.Value, maxWidth, frameRate, streamMode, socket, logger);
+            _logStore.AddInformation("webrtc", $"Accepted signaling socket for HWND {handle.Value}, {frameRate} fps, maxWidth={maxWidth?.ToString() ?? "auto"}, mode={streamMode.ToQueryValue()}, codec={videoCodecPreference.ToQueryValue()}.");
+            await using var session = new WebRtcWindowStreamSession(broker, handle.Value, maxWidth, frameRate, streamMode, videoCodecPreference, socket, logger);
 
             try
             {

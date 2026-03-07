@@ -5,6 +5,7 @@
 # Local tooling caches
 .dotnet/
 .dotnet-home/
+**/.dotnet-cli/
 window-share-portal/.dotnet/
 window-share-portal/.dotnet-home/
 
@@ -14,3 +15,14 @@ window-share-portal/.scratch-api/
 
 # Runtime logs
 window-share-portal/logs/
+
+# IDE and local machine state
+.vs/
+.idea/
+*.user
+*.rsuser
+*.suo
+
+# Test and publish output
+**/TestResults/
+**/artifacts/

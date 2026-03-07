@@ -184,13 +184,19 @@ button:disabled {
     overflow: hidden;
     text-overflow: ellipsis;
     color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.viewer-window-title:active {
+    background: rgba(47, 170, 132, 0.3);
 }
 
 /* --- Frame --- */
 
 .frame-stage {
     position: absolute;
-    inset: 0 0 86px 0;
+    inset: 0 0 80px 0;
     display: grid;
     place-items: center;
     overflow: hidden;
@@ -263,7 +269,7 @@ button:disabled {
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 90px;
+    bottom: 84px;
     z-index: 3;
     padding: 2px 12px;
     text-align: center;
@@ -304,8 +310,9 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.text-dock-row-tools {
-    grid-template-columns: auto auto minmax(60px, 1fr);
+.text-dock-row-keys {
+    display: flex;
+    gap: 3px;
 }
 
 .text-dock input {
@@ -334,29 +341,20 @@ button:disabled {
     color: var(--text-dim);
 }
 
-/* --- D-pad & quick keys --- */
-
-.quick-dpad {
-    display: grid;
-    grid-template-columns: repeat(3, 26px);
-    grid-template-rows: repeat(2, 26px);
-    grid-template-areas:
-        ". up ."
-        "left down right";
-    gap: 2px;
-}
+/* --- Quick keys --- */
 
 .quick-key-button {
+    flex: 1 1 0;
     display: grid;
     place-items: center;
-    min-height: 26px;
-    min-width: 26px;
-    padding: 2px;
+    height: 30px;
+    min-width: 0;
+    padding: 2px 0;
     border-radius: 6px;
     background: var(--surface-hi);
     border: 1px solid var(--border);
     color: var(--text);
-    font-size: 0.75rem;
+    font-size: 0.68rem;
     font-weight: 600;
     -webkit-tap-highlight-color: transparent;
 }
@@ -365,57 +363,42 @@ button:disabled {
     background: var(--accent-dim);
 }
 
-.quick-key-up { grid-area: up; }
-.quick-key-left { grid-area: left; }
-.quick-key-down { grid-area: down; }
-.quick-key-right { grid-area: right; }
+/* --- Scroll rail (right edge) --- */
 
-.quick-key-wide {
-    min-width: 48px;
-    padding: 2px 6px;
-}
-
-/* --- Scroll pad --- */
-
-.scroll-pad {
-    position: relative;
-    min-height: 54px;
-    min-width: 0;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--surface);
+.scroll-rail {
+    position: absolute;
+    top: 40px;
+    right: 0;
+    bottom: 0;
+    width: 32px;
+    z-index: 4;
     touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.03);
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+    cursor: ns-resize;
 }
 
-.scroll-pad-label {
-    position: absolute;
-    top: 5px;
-    left: 8px;
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-dim);
+.scroll-rail-track {
+    width: 4px;
+    height: 40%;
+    min-height: 40px;
+    max-height: 120px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    pointer-events: none;
+    transition: background 150ms ease;
 }
 
-.scroll-pad-origin {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 10px;
-    height: 10px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
+.scroll-rail.active {
+    background: rgba(47, 170, 132, 0.08);
+    border-left-color: var(--accent);
 }
 
-.scroll-pad.active {
-    border-color: var(--accent);
-    background: rgba(47, 170, 132, 0.06);
-}
-
-.scroll-pad.active .scroll-pad-origin {
-    border-color: var(--accent);
+.scroll-rail.active .scroll-rail-track {
+    background: var(--accent);
 }
 
 /* ===== Drawer ===== */
@@ -550,17 +533,23 @@ button:disabled {
     margin-top: 6px;
 }
 
-/* --- Pointer / Stream toggle rows --- */
+/* --- Stream toggle rows --- */
 
-.pointer-mode-row,
 .stream-mode-row {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 3px;
 }
 
-.pointer-mode-button,
-.stream-mode-button {
+.video-codec-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px;
+    margin-top: 6px;
+}
+
+.stream-mode-button,
+.video-codec-button {
     height: 32px;
     border-radius: 7px;
     background: var(--surface-hi);
@@ -571,8 +560,8 @@ button:disabled {
     -webkit-tap-highlight-color: transparent;
 }
 
-.pointer-mode-button.active,
-.stream-mode-button.active {
+.stream-mode-button.active,
+.video-codec-button.active {
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-text);
@@ -587,29 +576,6 @@ button:disabled {
     line-height: 1.45;
     overflow-wrap: anywhere;
     word-break: break-word;
-}
-
-/* --- Shortcut grid --- */
-
-.shortcut-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 3px;
-}
-
-.shortcut-button {
-    height: 30px;
-    border-radius: 7px;
-    background: var(--surface-hi);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 0.72rem;
-    font-weight: 600;
-    -webkit-tap-highlight-color: transparent;
-}
-
-.shortcut-button:active:not(:disabled) {
-    background: var(--accent-dim);
 }
 
 /* --- FPS row --- */
@@ -642,6 +608,25 @@ button:disabled {
 }
 
 /* --- Window list --- */
+
+.filter-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0 6px;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.filter-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
 
 .window-list {
     display: grid;
@@ -742,46 +727,6 @@ button:disabled {
     color: var(--text-dim);
 }
 
-/* --- Server info --- */
-
-.meta-list {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-}
-
-.meta-row {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-}
-
-.meta-label {
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-}
-
-.meta-value {
-    display: grid;
-    gap: 1px;
-    min-width: 0;
-    font-size: 0.72rem;
-    color: var(--text);
-    overflow-wrap: anywhere;
-    word-break: break-all;
-    line-height: 1.35;
-}
-
-.stack-list-item {
-    display: block;
-    min-width: 0;
-    overflow-wrap: anywhere;
-    word-break: break-all;
-}
-
 /* --- Drawer footer --- */
 
 .drawer-footer {
@@ -798,10 +743,6 @@ button:disabled {
 @media (max-width: 360px) {
     .side-drawer {
         width: 85vw;
-    }
-
-    .shortcut-grid {
-        grid-template-columns: repeat(3, 1fr);
     }
 
     .quick-dpad {
