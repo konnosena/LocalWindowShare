@@ -20,6 +20,7 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
     private readonly int? _maxWidth;
     private readonly int _frameRate;
     private readonly StreamTuningMode _streamMode;
+    private readonly WebRtcVideoCodecPreference _requestedVideoCodecPreference;
     private readonly WebSocket _socket;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _socketSendLock = new(1, 1);
@@ -37,21 +38,20 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
     private VideoCodecsEnum _selectedVideoCodec = VideoCodecsEnum.VP8;
     private int _forceKeyFrameBudget = 3;
 
-    public WebRtcWindowStreamSession(WindowBroker broker, long windowHandle, int? maxWidth, int frameRate, StreamTuningMode streamMode, WebSocket socket, ILogger logger)
+    public WebRtcWindowStreamSession(WindowBroker broker, long windowHandle, int? maxWidth, int frameRate, StreamTuningMode streamMode, WebRtcVideoCodecPreference requestedVideoCodecPreference, WebSocket socket, ILogger logger)
     {
         _broker = broker;
         _windowHandle = windowHandle;
         _maxWidth = maxWidth;
         _frameRate = Math.Clamp(frameRate, 15, 60);
         _streamMode = streamMode;
+        _requestedVideoCodecPreference = requestedVideoCodecPreference;
         _socket = socket;
         _logger = logger;
 
         _peerConnection = new RTCPeerConnection(null);
         _videoEncoder = new VpxVideoEncoder();
-        var supportedFormats = _videoEncoder.SupportedFormats
-            .Select(format => new VideoFormat(format))
-            .ToList();
+        var supportedFormats = BuildSupportedFormats();
         if (supportedFormats.Count > 0)
         {
             _selectedVideoCodec = supportedFormats[0].Codec;
@@ -83,6 +83,50 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
                 _logger.LogDebug(ex, "Windows Graphics Capture was unavailable for HWND {Handle}. Falling back to bitmap capture.", _windowHandle);
             }
         }
+    }
+
+    private List<VideoFormat> BuildSupportedFormats()
+    {
+        var formats = _videoEncoder.SupportedFormats
+            .Select(format => new VideoFormat(format))
+            .ToList();
+
+        if (formats.All(format => format.Codec != VideoCodecsEnum.VP8))
+        {
+            formats.Add(new VideoFormat(VideoCodecsEnum.VP8, 107, 90000, string.Empty));
+        }
+
+        formats = formats
+            .Where(format => format.Codec == VideoCodecsEnum.VP8)
+            .ToList();
+
+        formats = ReorderFormatsByPreference(formats);
+        var requestedCodec = _requestedVideoCodecPreference.ToQueryValue();
+        var advertised = string.Join(", ", formats.Select(format => format.Codec.ToString()));
+        _logger.LogInformation("Advertising video codecs {Codecs} for HWND {Handle}. Requested={Requested}.", advertised, _windowHandle, requestedCodec);
+        if (_requestedVideoCodecPreference is WebRtcVideoCodecPreference.AV1 or WebRtcVideoCodecPreference.VP9)
+        {
+            _logger.LogWarning("{RequestedCodec} was requested for HWND {Handle}, but this build can only send VP8. Falling back to {Fallback}.", _requestedVideoCodecPreference, _windowHandle, formats.First().Codec);
+        }
+
+        return formats;
+    }
+
+    private List<VideoFormat> ReorderFormatsByPreference(List<VideoFormat> formats)
+    {
+        var orderedCodecs = _requestedVideoCodecPreference switch
+        {
+            _ => new[] { VideoCodecsEnum.VP8 },
+        };
+
+        return formats
+            .OrderBy(format =>
+            {
+                var index = Array.IndexOf(orderedCodecs, format.Codec);
+                return index >= 0 ? index : orderedCodecs.Length;
+            })
+            .ThenBy(format => format.FormatID)
+            .ToList();
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)

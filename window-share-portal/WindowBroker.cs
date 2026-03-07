@@ -120,6 +120,26 @@ internal sealed class WindowBroker
         }
     }
 
+    public ResizeResult ResizeWindow(long handle, int width, int height)
+    {
+        if (!TryResolveWindow(handle, out var windowHandle, out var summary, out var message, out var statusCode))
+        {
+            return new ResizeResult(new OperationError(statusCode, message), default);
+        }
+
+        var previousBounds = summary.Bounds;
+
+        if (NativeMethods.IsIconic(windowHandle))
+        {
+            NativeMethods.ShowWindow(windowHandle, NativeMethods.SW_RESTORE);
+        }
+
+        NativeMethods.GetWindowRect(windowHandle, out var rect);
+        NativeMethods.MoveWindow(windowHandle, rect.Left, rect.Top, width, height, true);
+
+        return new ResizeResult(null, previousBounds);
+    }
+
     public OperationError? ActivateWindow(long handle)
     {
         if (!TryResolveWindow(handle, out var windowHandle, out _, out var message, out var statusCode))

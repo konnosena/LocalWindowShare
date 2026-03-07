@@ -12,6 +12,16 @@ const FRAME_RATE_STORAGE_KEY = "windowSharePortal.frameRate";
 const STREAM_MODE_OPTIONS = ["low-latency", "balanced", "high-quality"];
 const DEFAULT_STREAM_MODE = "balanced";
 const STREAM_MODE_STORAGE_KEY = "windowSharePortal.streamMode";
+const VIDEO_CODEC_OPTIONS = ["auto", "vp8", "vp9", "av1"];
+const DEFAULT_VIDEO_CODEC = "auto";
+const VIDEO_CODEC_STORAGE_KEY = "windowSharePortal.videoCodec";
+const FILTER_WT_STORAGE_KEY = "windowSharePortal.filterWindowsTerminal";
+const DEFAULT_VIDEO_CODEC_UI_OPTIONS = Object.freeze([
+    { value: "auto", label: "Auto", available: true, hint: "利用可能な codec の中から最適なものを使います。" },
+    { value: "vp8", label: "VP8", available: true, hint: "互換性優先です。" },
+    { value: "vp9", label: "VP9", available: false, hint: "現在の送信ライブラリでは未対応です。" },
+    { value: "av1", label: "AV1", available: false, hint: "現在のサーバービルドでは未対応です。" },
+]);
 const FRAME_WIDTH_CAPS_BY_MODE = Object.freeze({
     "low-latency": { 15: 1280, 30: 960, 45: 900, 60: 800 },
     balanced: { 15: 1600, 30: 1280, 45: 1120, 60: 960 },
@@ -29,6 +39,7 @@ const state = {
     windows: [],
     selectedHandle: null,
     selectedWindow: null,
+    selectionGeneration: 0,
     frameTimer: null,
     frameBusy: false,
     frameUrl: null,
@@ -41,7 +52,6 @@ const state = {
     windowsTimer: null,
     serverInfo: null,
     pointerActive: false,
-    pointerMode: "left",
     activePointerId: null,
     activeInputKind: null,
     touchInteractionMode: null,
@@ -65,6 +75,7 @@ const state = {
     frameTranslateY: 0,
     frameRate: loadFrameRatePreference(),
     streamMode: loadStreamModePreference(),
+    videoCodecPreference: loadVideoCodecPreference(),
     pendingTapTimer: null,
     pendingTapRatio: null,
     pendingTapTime: 0,
@@ -73,6 +84,8 @@ const state = {
     scrollPadLastClientY: null,
     scrollPadCarry: 0,
     drawerOpen: false,
+    filterWindowsTerminal: loadFilterWtPreference(),
+    savedWindowBounds: null,
 };
 
 const elements = {
@@ -85,10 +98,9 @@ const elements = {
     drawerBackdrop: document.getElementById("drawer-backdrop"),
     sideDrawer: document.getElementById("side-drawer"),
     drawerCloseButton: document.getElementById("drawer-close-button"),
-    serverUrl: document.getElementById("server-url"),
-    vpnAddresses: document.getElementById("vpn-addresses"),
-    tokenMode: document.getElementById("token-mode"),
     refreshButton: document.getElementById("refresh-button"),
+    launchExplorer: document.getElementById("launch-explorer"),
+    launchCmd: document.getElementById("launch-cmd"),
     windowList: document.getElementById("window-list"),
     windowPrevButton: document.getElementById("window-prev-button"),
     windowNextButton: document.getElementById("window-next-button"),
@@ -105,17 +117,18 @@ const elements = {
     frameRateSelect: document.getElementById("frame-rate-select"),
     streamModeButtons: Array.from(document.querySelectorAll(".stream-mode-button")),
     streamModeHint: document.getElementById("stream-mode-hint"),
+    videoCodecButtons: Array.from(document.querySelectorAll(".video-codec-button")),
+    videoCodecHint: document.getElementById("video-codec-hint"),
     textForm: document.getElementById("text-form"),
     textInput: document.getElementById("text-input"),
     textSubmit: document.getElementById("text-submit"),
     quickKeyButtons: Array.from(document.querySelectorAll(".quick-key-button")),
     scrollPad: document.getElementById("scroll-pad"),
-    pointerModeButtons: Array.from(document.querySelectorAll(".pointer-mode-button")),
-    pointerModeHint: document.getElementById("pointer-mode-hint"),
-    shortcutButtons: Array.from(document.querySelectorAll(".shortcut-button")),
+    filterWtCheckbox: document.getElementById("filter-wt-checkbox"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+    elements.filterWtCheckbox.checked = state.filterWindowsTerminal;
     registerGlobalClientLogging();
     bindEvents();
     bootstrap().catch(showFatalError);
@@ -125,6 +138,8 @@ function bindEvents() {
     document.addEventListener("gesturestart", preventBrowserZoom, { passive: false });
     document.addEventListener("gesturechange", preventBrowserZoom, { passive: false });
     document.addEventListener("gestureend", preventBrowserZoom, { passive: false });
+    document.addEventListener("touchend", preventDoubleTapZoom, { passive: false });
+    document.addEventListener("dblclick", (event) => event.preventDefault());
     elements.loginForm.addEventListener("submit", (event) => {
         handleLogin(event).catch(showFatalError);
     });
@@ -139,6 +154,12 @@ function bindEvents() {
     elements.refreshButton.addEventListener("click", () => {
         refreshWindows(true).catch(showTransientError);
     });
+    elements.launchExplorer.addEventListener("click", () => {
+        launchApp("explorer").catch(showTransientError);
+    });
+    elements.launchCmd.addEventListener("click", () => {
+        launchApp("cmd").catch(showTransientError);
+    });
     elements.windowPrevButton.addEventListener("click", () => {
         selectAdjacentWindow(-1).catch(showTransientError);
     });
@@ -151,6 +172,9 @@ function bindEvents() {
     elements.frameRefreshButton.addEventListener("click", () => {
         refreshFrameNow(true).catch(showTransientError);
     });
+    elements.viewerWindowTitle.addEventListener("click", () => {
+        toggleMobileResize().catch(showTransientError);
+    });
     elements.textForm.addEventListener("submit", (event) => {
         handleSendText(event).catch(showTransientError);
     });
@@ -158,6 +182,11 @@ function bindEvents() {
     for (const button of elements.streamModeButtons) {
         button.addEventListener("click", () => {
             handleStreamModeChange(button.dataset.streamMode).catch(showTransientError);
+        });
+    }
+    for (const button of elements.videoCodecButtons) {
+        button.addEventListener("click", () => {
+            handleVideoCodecChange(button.dataset.videoCodec).catch(showTransientError);
         });
     }
 
@@ -189,23 +218,23 @@ function bindEvents() {
         syncFrameCursor();
     });
 
-    for (const button of elements.pointerModeButtons) {
-        button.addEventListener("click", () => {
-            setPointerMode(button.dataset.pointerMode);
-        });
-    }
-
-    for (const button of elements.shortcutButtons) {
-        button.addEventListener("click", () => {
-            sendKey(button.dataset.key).catch(showTransientError);
-        });
-    }
-
     for (const button of elements.quickKeyButtons) {
         button.addEventListener("click", () => {
             sendKey(button.dataset.key).catch(showTransientError);
         });
     }
+
+    elements.filterWtCheckbox.addEventListener("change", () => {
+        state.filterWindowsTerminal = elements.filterWtCheckbox.checked;
+        saveFilterWtPreference(state.filterWindowsTerminal);
+        const navWindows = getNavigableWindows();
+        if (navWindows.length > 0) {
+            selectWindow(navWindows[0].handle, false).catch(showTransientError);
+        } else if (state.windows.length > 0) {
+            selectWindow(state.windows[0].handle, false).catch(showTransientError);
+        }
+        renderHeaderNavigation();
+    });
 
     elements.scrollPad.addEventListener("pointerdown", (event) => {
         handleScrollPadPointerDown(event);
@@ -246,6 +275,7 @@ async function showWorkspace() {
     elements.drawerBackdrop.hidden = false;
     renderFrameRateSelection();
     renderStreamModeSelection();
+    renderVideoCodecSelection();
     renderServerInfo();
     closeDrawer(true);
     await refreshWindows(false);
@@ -277,16 +307,6 @@ function showLoggedOutState() {
 }
 
 function renderServerInfo() {
-    const listenUrls = Array.isArray(state.serverInfo.listenUrls) && state.serverInfo.listenUrls.length > 0
-        ? state.serverInfo.listenUrls
-        : [state.serverInfo.listenUrl].filter(Boolean);
-    const allowedNetworks = Array.isArray(state.serverInfo.allowedNetworks)
-        ? state.serverInfo.allowedNetworks
-        : [];
-
-    renderCompactList(elements.serverUrl, listenUrls, "none");
-    renderCompactList(elements.vpnAddresses, allowedNetworks, "loopback only");
-    elements.tokenMode.textContent = state.serverInfo.tokenModeLabel || (state.serverInfo.hasCustomToken ? "custom token" : "generated at startup");
 }
 
 function renderFrameRateSelection() {
@@ -311,21 +331,28 @@ function renderStreamModeSelection() {
             : "Balance: 画質と遅延のバランスを取ります。";
 }
 
-function renderCompactList(element, items, emptyText) {
-    element.replaceChildren();
+function renderVideoCodecSelection() {
+    const options = getVideoCodecUiOptions();
+    const selectedValue = ensureSupportedVideoCodecPreference(state.videoCodecPreference, options);
 
-    const values = Array.isArray(items) ? items.filter(Boolean) : [];
-    if (values.length === 0) {
-        element.textContent = emptyText;
+    for (const button of elements.videoCodecButtons) {
+        const value = normalizeVideoCodecPreference(button.dataset.videoCodec);
+        const option = options.find((current) => current.value === value);
+        const available = option?.available !== false;
+        button.classList.toggle("active", value === selectedValue);
+        button.disabled = !available;
+        if (option?.label) {
+            button.textContent = option.label;
+        }
+        button.title = option?.hint || "";
+    }
+
+    if (!elements.videoCodecHint) {
         return;
     }
 
-    for (const value of values) {
-        const item = document.createElement("span");
-        item.className = "stack-list-item";
-        item.textContent = value;
-        element.appendChild(item);
-    }
+    const selectedOption = options.find((option) => option.value === selectedValue) || options[0];
+    elements.videoCodecHint.textContent = `${selectedOption.label}: ${selectedOption.hint}`;
 }
 
 async function handleLogin(event) {
@@ -359,6 +386,71 @@ async function handleLogout() {
     });
 
     showLoggedOutState();
+}
+
+async function toggleMobileResize() {
+    if (!state.selectedHandle) {
+        return;
+    }
+
+    if (state.savedWindowBounds) {
+        const bounds = state.savedWindowBounds;
+        const response = await fetch(`/api/windows/${state.selectedHandle}/resize`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ width: bounds.width, height: bounds.height }),
+        });
+
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.message || "Failed to restore window size.");
+        }
+
+        state.savedWindowBounds = null;
+        elements.viewerStatus.textContent = `Restored to ${bounds.width}x${bounds.height}.`;
+    } else {
+        const stageRect = elements.frameStage.getBoundingClientRect();
+        const headerHeight = 44;
+        const scrollRailWidth = 32;
+        const availableWidth = Math.floor(stageRect.width - scrollRailWidth);
+        const availableHeight = Math.floor(stageRect.height - headerHeight);
+        const targetWidth = Math.max(300, Math.min(availableWidth, 600));
+        const targetHeight = Math.max(400, Math.min(availableHeight, 1200));
+
+        const response = await fetch(`/api/windows/${state.selectedHandle}/resize`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ width: targetWidth, height: targetHeight }),
+        });
+
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.message || "Failed to resize window.");
+        }
+
+        const result = await response.json();
+        state.savedWindowBounds = result.previousBounds;
+        elements.viewerStatus.textContent = `Resized to ${targetWidth}x${targetHeight}.`;
+    }
+
+    await refreshFrameNow(true);
+}
+
+async function launchApp(app) {
+    const response = await fetch("/api/launch", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app }),
+    });
+    if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to launch app.");
+    }
+    elements.viewerStatus.textContent = `Launched ${app}.`;
+    setTimeout(() => refreshWindows(true).catch(showTransientError), 1500);
 }
 
 async function refreshWindows(preserveSelection) {
@@ -426,13 +518,23 @@ function renderWindowList(windows) {
 }
 
 async function selectWindow(handle, closeMenuAfterSelection = true) {
+    const selectionId = ++state.selectionGeneration;
+
     if (state.selectedHandle && state.selectedHandle !== handle) {
         await disconnectWebRtcSession({ clearVideo: true });
+    }
+
+    if (selectionId !== state.selectionGeneration) {
+        return;
     }
 
     const response = await fetch(`/api/windows/${handle}`, { credentials: "same-origin" });
     if (!response.ok) {
         throw new Error("Failed to load the selected window.");
+    }
+
+    if (selectionId !== state.selectionGeneration) {
+        return;
     }
 
     state.selectedHandle = handle;
@@ -473,13 +575,6 @@ function renderSelection() {
     for (const button of elements.quickKeyButtons) {
         button.disabled = false;
     }
-    for (const button of elements.pointerModeButtons) {
-        button.disabled = false;
-    }
-    for (const button of elements.shortcutButtons) {
-        button.disabled = false;
-    }
-    renderPointerMode();
     renderHeaderNavigation();
     syncFrameTransform();
     syncFrameCursor();
@@ -507,15 +602,10 @@ function resetSelection() {
     elements.viewerWindowTitle.textContent = "No window selected";
     elements.activateButton.disabled = true;
     elements.frameRefreshButton.disabled = true;
+    state.savedWindowBounds = null;
     elements.textInput.disabled = true;
     elements.textSubmit.disabled = true;
     for (const button of elements.quickKeyButtons) {
-        button.disabled = true;
-    }
-    for (const button of elements.pointerModeButtons) {
-        button.disabled = true;
-    }
-    for (const button of elements.shortcutButtons) {
         button.disabled = true;
     }
     elements.windowFrame.hidden = true;
@@ -523,28 +613,9 @@ function resetSelection() {
     elements.framePlaceholder.hidden = false;
     elements.framePlaceholder.textContent = "WebRTC preview will appear here.";
     elements.viewerStatus.textContent = "No connection.";
-    renderPointerMode();
     renderHeaderNavigation();
     syncFrameTransform();
     releaseFrameUrl();
-}
-
-function renderPointerMode() {
-    for (const button of elements.pointerModeButtons) {
-        button.classList.toggle("active", button.dataset.pointerMode === state.pointerMode);
-    }
-
-    elements.pointerModeHint.textContent = state.pointerMode === "right"
-        ? "Right: 1本指でカーソル移動、タップで右クリック。送信後は Left に戻ります。"
-        : state.pointerMode === "scroll"
-            ? "Scroll: 1本指または2本指ドラッグでスクロール。ピンチで拡大縮小します。"
-            : "Left: 1本指ドラッグでカーソル移動、タップで左クリック、長押し後の移動でドラッグ。2本指ドラッグでスクロール、ピンチで拡大縮小できます。";
-}
-
-function setPointerMode(mode) {
-    state.pointerMode = mode === "right" || mode === "scroll" ? mode : "left";
-    renderPointerMode();
-    updateFrameCursor(state.cursorRatio, { style: cursorStyleForCurrentState(), pressed: isPressedCursor() });
 }
 
 function streamModeLabel(mode) {
@@ -553,6 +624,16 @@ function streamModeLabel(mode) {
         : mode === "low-latency"
             ? "Speed"
             : "Balance";
+}
+
+function videoCodecLabel(codec) {
+    return codec === "vp8"
+        ? "VP8"
+        : codec === "vp9"
+            ? "VP9"
+            : codec === "av1"
+                ? "AV1"
+                : "Auto";
 }
 
 async function handleStreamModeChange(mode) {
@@ -571,35 +652,59 @@ async function handleStreamModeChange(mode) {
     }
 }
 
+async function handleVideoCodecChange(codec) {
+    const nextCodec = ensureSupportedVideoCodecPreference(codec);
+    if (nextCodec === state.videoCodecPreference) {
+        renderVideoCodecSelection();
+        return;
+    }
+
+    state.videoCodecPreference = nextCodec;
+    renderVideoCodecSelection();
+    saveVideoCodecPreference(nextCodec);
+    elements.viewerStatus.textContent = `Codec preference: ${videoCodecLabel(nextCodec)}`;
+    if (state.selectedHandle && !state.pointerActive) {
+        await refreshFrameNow(true);
+    }
+}
+
 function highlightSelectedWindow() {
     for (const card of document.querySelectorAll(".window-card")) {
         card.classList.toggle("selected", Number(card.dataset.handle) === state.selectedHandle);
     }
 }
 
+function getNavigableWindows() {
+    if (!state.filterWindowsTerminal) {
+        return state.windows;
+    }
+    return state.windows.filter((w) => /WindowsTerminal|wt\b/i.test(w.processName));
+}
+
 function renderHeaderNavigation() {
-    const index = state.windows.findIndex((windowInfo) => windowInfo.handle === state.selectedHandle);
-    const hasSelection = index >= 0;
-    elements.windowPrevButton.disabled = !hasSelection || index === 0;
-    elements.windowNextButton.disabled = !hasSelection || index === state.windows.length - 1;
+    const navWindows = getNavigableWindows();
+    const hasSelection = navWindows.some((w) => w.handle === state.selectedHandle);
+    elements.windowPrevButton.disabled = !hasSelection || navWindows.length <= 1;
+    elements.windowNextButton.disabled = !hasSelection || navWindows.length <= 1;
 }
 
 async function selectAdjacentWindow(direction) {
-    if (!state.selectedHandle || state.windows.length === 0) {
+    const navWindows = getNavigableWindows();
+    if (!state.selectedHandle || navWindows.length === 0) {
         return;
     }
 
-    const currentIndex = state.windows.findIndex((windowInfo) => windowInfo.handle === state.selectedHandle);
+    const currentIndex = navWindows.findIndex((w) => w.handle === state.selectedHandle);
     if (currentIndex < 0) {
         return;
     }
 
-    const nextIndex = Math.min(state.windows.length - 1, Math.max(0, currentIndex + direction));
+    const nextIndex = (currentIndex + direction + navWindows.length) % navWindows.length;
     if (nextIndex === currentIndex) {
         return;
     }
 
-    await selectWindow(state.windows[nextIndex].handle, false);
+    await selectWindow(navWindows[nextIndex].handle, false);
 }
 
 function startFrameLoop() {
@@ -660,7 +765,8 @@ async function ensureWebRtcSession(forceReconnect) {
     }
 
     const requestedWidth = getRequestedFrameWidth();
-    const currentKey = `${state.selectedHandle}:${state.frameRate}:${state.streamMode}:${requestedWidth}`;
+    const selectedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
+    const currentKey = `${state.selectedHandle}:${state.frameRate}:${state.streamMode}:${selectedCodec}:${requestedWidth}`;
     const isActive = state.webrtcConnected
         && state.peerConnection
         && state.signalingSocket
@@ -673,10 +779,10 @@ async function ensureWebRtcSession(forceReconnect) {
     }
 
     await disconnectWebRtcSession({ clearVideo: forceReconnect });
-    await connectWebRtcSession(requestedWidth, currentKey);
+    await connectWebRtcSession(requestedWidth, currentKey, selectedCodec);
 }
 
-async function connectWebRtcSession(requestedWidth, streamKey) {
+async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec) {
     if (!state.selectedHandle) {
         return;
     }
@@ -686,24 +792,26 @@ async function connectWebRtcSession(requestedWidth, streamKey) {
         frameRate: state.frameRate,
         maxWidth: requestedWidth,
         streamMode: state.streamMode,
+        codec: selectedCodec,
     });
 
     const generation = ++state.webrtcGeneration;
     const peerConnection = new RTCPeerConnection({
         iceServers: [],
     });
-    const signalingSocket = new WebSocket(buildWebRtcUrl(state.selectedHandle, requestedWidth, state.frameRate, state.streamMode));
+    const signalingSocket = new WebSocket(buildWebRtcUrl(state.selectedHandle, requestedWidth, state.frameRate, state.streamMode, selectedCodec));
     const pendingRemoteIceCandidates = [];
     let remoteDescriptionApplied = false;
     let signalingMessageChain = Promise.resolve();
     const videoTransceiver = peerConnection.addTransceiver("video", { direction: "recvonly" });
     configureReceiverForCurrentMode(videoTransceiver.receiver);
+    applyVideoCodecPreference(videoTransceiver, selectedCodec);
 
     peerConnection.__streamKey = streamKey;
     state.peerConnection = peerConnection;
     state.signalingSocket = signalingSocket;
     state.webrtcConnected = false;
-    elements.viewerStatus.textContent = `WebRTC connecting... ${state.frameRate} fps`;
+    elements.viewerStatus.textContent = `WebRTC connecting... ${state.frameRate} fps · ${videoCodecLabel(selectedCodec)} pref`;
     elements.framePlaceholder.hidden = false;
     elements.framePlaceholder.textContent = "WebRTC stream connecting...";
     elements.windowFrame.hidden = true;
@@ -837,9 +945,7 @@ async function connectWebRtcSession(requestedWidth, streamKey) {
                 reason: event.reason,
                 wasClean: event.wasClean,
             });
-            if (!state.webrtcConnected && generation === state.webrtcGeneration) {
-                rejectOnce(new Error("WebRTC signaling closed before the stream was ready."));
-            }
+            rejectOnce(new Error("WebRTC signaling closed before the stream was ready."));
         }, { once: true });
 
         signalingSocket.addEventListener("error", () => {
@@ -920,7 +1026,7 @@ async function connectWebRtcSession(requestedWidth, streamKey) {
                 state.webrtcConnected = true;
                 elements.windowFrame.hidden = false;
                 elements.framePlaceholder.hidden = true;
-                elements.viewerStatus.textContent = `WebRTC live · ${state.frameRate} fps · ${streamModeLabel(state.streamMode)}`;
+                elements.viewerStatus.textContent = `WebRTC live · ${state.frameRate} fps · ${streamModeLabel(state.streamMode)} · ${videoCodecLabel(selectedCodec)} pref`;
                 updateFrameCursor(state.cursorRatio ?? { x: 0.5, y: 0.5 }, { style: cursorStyleForCurrentState(), pressed: isPressedCursor() });
                 syncFrameTransform();
                 resolveOnce();
@@ -1025,13 +1131,61 @@ function configureReceiverForCurrentMode(receiver) {
     }
 }
 
-function buildWebRtcUrl(handle, maxWidth, frameRate, streamMode) {
+function applyVideoCodecPreference(transceiver, codecPreference) {
+    if (!transceiver || typeof transceiver.setCodecPreferences !== "function" || !window.RTCRtpReceiver || typeof RTCRtpReceiver.getCapabilities !== "function") {
+        return;
+    }
+
+    const capabilities = RTCRtpReceiver.getCapabilities("video");
+    const codecs = Array.isArray(capabilities?.codecs) ? capabilities.codecs.slice() : [];
+    if (codecs.length === 0) {
+        return;
+    }
+
+    const options = getVideoCodecUiOptions();
+    const supportedServerCodecs = options
+        .filter((option) => option.available && option.value !== "auto")
+        .map((option) => option.value);
+    const preferredToken = codecPreference !== "auto" && supportedServerCodecs.includes(codecPreference)
+        ? codecPreference
+        : null;
+    const preferred = [];
+    const fallback = [];
+    for (const codec of codecs) {
+        const mimeType = typeof codec?.mimeType === "string" ? codec.mimeType.toLowerCase() : "";
+        if (preferredToken && mimeType.includes(preferredToken)) {
+            preferred.push(codec);
+        } else if (supportedServerCodecs.some((value) => mimeType.includes(value))) {
+            fallback.push(codec);
+        } else {
+            fallback.push(codec);
+        }
+    }
+
+    const ordered = preferred.length > 0 ? preferred.concat(fallback) : codecs;
+    try {
+        transceiver.setCodecPreferences(ordered);
+        logClientEvent("info", "Applied video codec preference.", {
+            requested: codecPreference,
+            preferredCount: preferred.length,
+            codecOrder: ordered.map((codec) => codec?.mimeType || null),
+        });
+    } catch (error) {
+        logClientEvent("warning", "Failed to apply video codec preference.", {
+            requested: codecPreference,
+            message: error?.message || String(error),
+        });
+    }
+}
+
+function buildWebRtcUrl(handle, maxWidth, frameRate, streamMode, codecPreference) {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = new URL(`${protocol}//${window.location.host}/ws/webrtc`);
     url.searchParams.set("handle", String(handle));
     url.searchParams.set("maxWidth", String(maxWidth));
     url.searchParams.set("frameRate", String(frameRate));
     url.searchParams.set("mode", normalizeStreamMode(streamMode));
+    url.searchParams.set("codec", ensureSupportedVideoCodecPreference(codecPreference));
     return url.toString();
 }
 
@@ -1153,6 +1307,36 @@ function normalizeStreamMode(value) {
     return STREAM_MODE_OPTIONS.includes(value) ? value : DEFAULT_STREAM_MODE;
 }
 
+function normalizeVideoCodecPreference(value) {
+    return VIDEO_CODEC_OPTIONS.includes(value) ? value : DEFAULT_VIDEO_CODEC;
+}
+
+function getVideoCodecUiOptions() {
+    return Array.isArray(state.serverInfo?.videoCodecOptions) && state.serverInfo.videoCodecOptions.length > 0
+        ? state.serverInfo.videoCodecOptions.map((option) => ({
+            value: normalizeVideoCodecPreference(option?.value),
+            label: typeof option?.label === "string" && option.label ? option.label : videoCodecLabel(option?.value),
+            available: option?.available !== false,
+            hint: typeof option?.hint === "string" && option.hint ? option.hint : "",
+        }))
+        : DEFAULT_VIDEO_CODEC_UI_OPTIONS;
+}
+
+function ensureSupportedVideoCodecPreference(value, options = getVideoCodecUiOptions()) {
+    const normalized = normalizeVideoCodecPreference(value);
+    const selectedOption = options.find((option) => option.value === normalized);
+    if (selectedOption?.available !== false) {
+        return normalized;
+    }
+
+    if (state.videoCodecPreference !== DEFAULT_VIDEO_CODEC) {
+        state.videoCodecPreference = DEFAULT_VIDEO_CODEC;
+        saveVideoCodecPreference(DEFAULT_VIDEO_CODEC);
+    }
+
+    return DEFAULT_VIDEO_CODEC;
+}
+
 function loadFrameRatePreference() {
     try {
         const stored = Number(window.localStorage.getItem(FRAME_RATE_STORAGE_KEY));
@@ -1184,6 +1368,36 @@ function saveStreamModePreference(value) {
     }
 }
 
+function loadVideoCodecPreference() {
+    try {
+        return normalizeVideoCodecPreference(window.localStorage.getItem(VIDEO_CODEC_STORAGE_KEY));
+    } catch {
+        return DEFAULT_VIDEO_CODEC;
+    }
+}
+
+function saveVideoCodecPreference(value) {
+    try {
+        window.localStorage.setItem(VIDEO_CODEC_STORAGE_KEY, ensureSupportedVideoCodecPreference(value));
+    } catch {
+    }
+}
+
+function loadFilterWtPreference() {
+    try {
+        return window.localStorage.getItem(FILTER_WT_STORAGE_KEY) === "true";
+    } catch {
+        return false;
+    }
+}
+
+function saveFilterWtPreference(value) {
+    try {
+        window.localStorage.setItem(FILTER_WT_STORAGE_KEY, value ? "true" : "false");
+    } catch {
+    }
+}
+
 async function handleFramePointerDown(event) {
     if (!state.selectedHandle || elements.windowFrame.hidden || event.pointerType === "touch") {
         return;
@@ -1200,21 +1414,9 @@ async function handleFramePointerDown(event) {
         elements.windowFrame.setPointerCapture(event.pointerId);
     }
 
-    updateFrameCursor(state.pointerLastRatio, { style: cursorStyleForCurrentState(), pressed: state.pointerMode === "left" });
-
-    if (state.pointerMode === "left") {
-        await sendPointerAction("down", state.pointerLastRatio);
-        elements.viewerStatus.textContent = "Left button down.";
-        return;
-    }
-
-    if (state.pointerMode === "scroll") {
-        state.scrollCarry = 0;
-        elements.viewerStatus.textContent = "Scroll mode active.";
-        return;
-    }
-
-    elements.viewerStatus.textContent = "Right click mode.";
+    updateFrameCursor(state.pointerLastRatio, { style: cursorStyleForCurrentState(), pressed: true });
+    await sendPointerAction("down", state.pointerLastRatio);
+    elements.viewerStatus.textContent = "Left button down.";
 }
 
 function handleFramePointerCancel(event) {
@@ -1230,11 +1432,10 @@ function handleFramePointerCancel(event) {
         }
     }
 
-    const shouldReleaseLeft = state.pointerMode === "left" && lastRatio;
     clearInteractionState(false);
     updateFrameCursor(lastRatio, { style: cursorStyleForCurrentState(), pressed: false });
 
-    if (shouldReleaseLeft) {
+    if (lastRatio) {
         sendPointerAction("up", lastRatio).catch(showTransientError);
     }
 
@@ -1264,16 +1465,8 @@ async function handleFramePointerUp(event) {
 
     updateFrameCursor(ratio, { style: cursorStyleForCurrentState(), pressed: false });
 
-    if (state.pointerMode === "left") {
-        await sendPointerAction("up", ratio);
-        elements.viewerStatus.textContent = "Left click sent.";
-    } else if (state.pointerMode === "right") {
-        await sendPointerAction("click", ratio, { button: "right" });
-        elements.viewerStatus.textContent = "Right click sent.";
-        setPointerMode("left");
-    } else {
-        elements.viewerStatus.textContent = "Scroll finished.";
-    }
+    await sendPointerAction("up", ratio);
+    elements.viewerStatus.textContent = "Left click sent.";
 
     scheduleNextFrame(getFrameIntervalMs());
 }
@@ -1285,7 +1478,7 @@ function handleFramePointerMove(event) {
 
     const ratio = getFrameRatiosFromClient(event.clientX, event.clientY);
     if (ratio) {
-        updateFrameCursor(ratio, { style: cursorStyleForCurrentState(), pressed: state.pointerActive && state.pointerMode === "left" });
+        updateFrameCursor(ratio, { style: cursorStyleForCurrentState(), pressed: state.pointerActive });
     }
 
     if (!state.pointerActive || state.activePointerId !== event.pointerId || !ratio) {
@@ -1293,17 +1486,8 @@ function handleFramePointerMove(event) {
     }
 
     event.preventDefault();
-    const previousRatio = state.pointerLastRatio ?? ratio;
     state.pointerLastRatio = ratio;
-
-    if (state.pointerMode === "left") {
-        queuePointerMove(ratio);
-        return;
-    }
-
-    if (state.pointerMode === "scroll") {
-        handleScrollGesture(previousRatio, ratio);
-    }
+    queuePointerMove(ratio);
 }
 
 async function handleFrameTouchStart(event) {
@@ -1325,7 +1509,7 @@ async function handleFrameTouchStart(event) {
     event.preventDefault();
     stopFrameLoop();
 
-    if (state.pendingTapTimer && state.pointerMode === "left") {
+    if (state.pendingTapTimer) {
         window.clearTimeout(state.pendingTapTimer);
         state.pendingTapTimer = null;
     }
@@ -1370,17 +1554,7 @@ async function handleFrameTouchMove(event) {
 
     if (state.touchPendingId === touch.identifier) {
         const distance = distanceBetween(point, state.touchPendingPoint ?? point);
-        if (state.pointerMode === "scroll" && Math.abs(deltaY) > 0) {
-            flushPendingSingleTapNow();
-            clearPendingTouch();
-            state.touchPendingId = null;
-            state.touchPendingPoint = null;
-            state.touchPendingMoved = true;
-            state.activePointerId = touch.identifier;
-            state.touchInteractionMode = "scroll";
-            state.scrollCarry = 0;
-            elements.viewerStatus.textContent = "Scroll mode active.";
-        } else if (distance >= TOUCH_MOVE_THRESHOLD) {
+        if (distance >= TOUCH_MOVE_THRESHOLD) {
             flushPendingSingleTapNow();
             clearPendingTouch();
             state.touchPendingId = null;
@@ -1441,15 +1615,7 @@ async function handleFrameTouchEnd(event) {
         state.touchPendingPoint = null;
 
         if (!moved && state.cursorRatio) {
-            if (state.pointerMode === "left") {
-                handleLeftTap(state.cursorRatio);
-            } else if (state.pointerMode === "right") {
-                await sendPointerAction("click", state.cursorRatio, { button: "right" });
-                elements.viewerStatus.textContent = "Right click sent.";
-                setPointerMode("left");
-            } else {
-                elements.viewerStatus.textContent = "Scroll ready.";
-            }
+            handleLeftTap(state.cursorRatio);
         }
 
         updateFrameCursor(state.cursorRatio, { style: cursorStyleForCurrentState(), pressed: false });
@@ -1507,7 +1673,7 @@ async function activateTouchHoldMode() {
     state.touchPendingId = null;
     state.touchPendingPoint = null;
     state.activePointerId = pendingId;
-    state.touchInteractionMode = state.pointerMode === "left" ? "drag" : state.pointerMode === "scroll" ? "scroll" : "move";
+    state.touchInteractionMode = "drag";
     state.scrollCarry = 0;
 
     if (state.touchInteractionMode === "drag" && state.cursorRatio) {
@@ -2099,16 +2265,11 @@ function distanceBetween(a, b) {
 }
 
 function cursorStyleForCurrentState() {
-    if (state.pointerMode === "scroll" || state.touchInteractionMode === "scroll") {
-        return "scroll";
-    }
-
     return "mouse";
 }
 
 function isPressedCursor() {
-    return state.pointerMode === "left"
-        && (state.touchInteractionMode === "drag" || (state.activeInputKind !== null && state.activeInputKind !== "touch"));
+    return state.touchInteractionMode === "drag" || (state.activeInputKind !== null && state.activeInputKind !== "touch");
 }
 
 async function sendPointerAction(action, ratio, options = {}) {
@@ -2197,6 +2358,15 @@ function handleGlobalKeyDown(event) {
 
 function preventBrowserZoom(event) {
     event.preventDefault();
+}
+
+let _lastTouchEndTime = 0;
+function preventDoubleTapZoom(event) {
+    const now = Date.now();
+    if (now - _lastTouchEndTime <= 300) {
+        event.preventDefault();
+    }
+    _lastTouchEndTime = now;
 }
 
 function toggleDrawer() {

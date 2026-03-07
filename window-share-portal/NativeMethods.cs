@@ -104,6 +104,9 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern bool PrintWindow(nint windowHandle, nint hdcBlt, uint flags);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool MoveWindow(nint windowHandle, int x, int y, int width, int height, bool repaint);
+
     [DllImport("user32.dll")]
     internal static extern bool GetCursorPos(out POINT point);
 
