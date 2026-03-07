@@ -216,10 +216,6 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
 
         var codecLabel = string.IsNullOrWhiteSpace(peerConnection.PreferredVideoCodec) ? "auto" : peerConnection.PreferredVideoCodec;
         _logger.LogInformation("Initialized libwebrtc backend for HWND {Handle}. PreferredVideoCodec={Codec}.", _currentWindowHandle, codecLabel);
-        if (_requestedVideoCodecPreference == WebRtcVideoCodecPreference.AV1)
-        {
-            _logger.LogWarning("AV1 was requested for HWND {Handle}, but the selected libwebrtc wrapper does not expose AV1 selection. Falling back to automatic codec selection.", _currentWindowHandle);
-        }
     }
 
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
@@ -705,6 +701,7 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
         {
             WebRtcVideoCodecPreference.VP8 => "VP8",
             WebRtcVideoCodecPreference.VP9 => "VP9",
+            WebRtcVideoCodecPreference.AV1 => "AV1",
             _ => string.Empty,
         };
     }
@@ -716,6 +713,10 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
             case WebRtcVideoCodecPreference.VP9:
                 peerConnection.PreferredVideoCodecExtraParamsLocal = "profile-id=0";
                 peerConnection.PreferredVideoCodecExtraParamsRemote = "profile-id=0";
+                break;
+            case WebRtcVideoCodecPreference.AV1:
+                peerConnection.PreferredVideoCodecExtraParamsLocal = "profile=0;level-idx=5;tier=0";
+                peerConnection.PreferredVideoCodecExtraParamsRemote = "profile=0;level-idx=5;tier=0";
                 break;
             default:
                 peerConnection.PreferredVideoCodecExtraParamsLocal = string.Empty;

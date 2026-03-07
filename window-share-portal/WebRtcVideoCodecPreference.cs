@@ -57,7 +57,7 @@ internal static class WebRtcVideoCodecPreferenceParser
             new("auto", "Auto", true, "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。"),
             new("vp8", "VP8", true, "互換性優先です。"),
             new("vp9", "VP9", true, "高効率です。profile-id=0 を優先して接続します。"),
-            new("av1", "AV1", false, "現在のサーバービルドでは未対応です。"),
+            new("av1", "AV1", true, "高圧縮です。profile=0 を優先して接続します。"),
         ];
     }
 }
