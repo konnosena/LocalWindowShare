@@ -12,5 +12,13 @@
   <ItemGroup>
     <PackageReference Include="SIPSorcery" Version="10.0.3" />
     <PackageReference Include="SIPSorceryMedia.Encoders" Version="10.0.4" />
+    <PackageReference Include="Microsoft.MixedReality.WebRTC" Version="2.0.2" GeneratePathProperty="true" />
   </ItemGroup>
+  <Target Name="CopyMixedRealityWebRtcNative" AfterTargets="Build">
+    <Copy
+      Condition="Exists('$(PkgMicrosoft_MixedReality_WebRTC)\\runtimes\\win10-x64\\native\\mrwebrtc.dll')"
+      SourceFiles="$(PkgMicrosoft_MixedReality_WebRTC)\\runtimes\\win10-x64\\native\\mrwebrtc.dll"
+      DestinationFolder="$(OutDir)"
+      SkipUnchangedFiles="true" />
+  </Target>
 </Project>

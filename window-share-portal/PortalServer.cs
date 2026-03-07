@@ -11,6 +11,7 @@ internal sealed class PortalServer : IAsyncDisposable
     private readonly ClientConnectionTracker _connectionTracker;
     private readonly PortalLogStore _logStore;
     private readonly PortalSessionStore _sessionStore;
+    private readonly IWebRtcStreamSessionFactory _webRtcStreamSessionFactory;
     private WebApplication? _app;
 
     public PortalServer(
@@ -19,7 +20,8 @@ internal sealed class PortalServer : IAsyncDisposable
         PortalRuntimeState runtimeState,
         ClientConnectionTracker connectionTracker,
         PortalLogStore logStore,
-        PortalSessionStore sessionStore)
+        PortalSessionStore sessionStore,
+        IWebRtcStreamSessionFactory webRtcStreamSessionFactory)
     {
         _args = args;
         _contentRoot = contentRoot;
@@ -27,9 +29,12 @@ internal sealed class PortalServer : IAsyncDisposable
         _connectionTracker = connectionTracker;
         _logStore = logStore;
         _sessionStore = sessionStore;
+        _webRtcStreamSessionFactory = webRtcStreamSessionFactory;
     }
 
     public bool IsRunning => _app is not null;
+
+    public string WebRtcBackendName => _webRtcStreamSessionFactory.BackendName;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -232,7 +237,7 @@ internal sealed class PortalServer : IAsyncDisposable
             listenUrls = _runtimeState.ListenUrls,
             allowedAddresses = _runtimeState.AllowedAddressLabels,
             allowedNetworks = _runtimeState.AllowedNetworkLabels,
-            videoCodecOptions = WebRtcVideoCodecPreferenceParser.GetUiOptions(),
+            videoCodecOptions = _webRtcStreamSessionFactory.SupportedVideoCodecOptions,
             tokenModeLabel = _runtimeState.TokenModeLabel,
             hasCustomToken = !string.Equals(_runtimeState.TokenModeLabel, "Generated at first launch", StringComparison.Ordinal),
             limitations = new[]
@@ -241,6 +246,7 @@ internal sealed class PortalServer : IAsyncDisposable
                 "Input injection can be blocked by Windows when the target app runs elevated or as a protected UI.",
                 "Some GPU-accelerated windows may return incomplete frames through PrintWindow.",
             },
+            webRtcBackend = _webRtcStreamSessionFactory.BackendName,
         }));
 
         app.MapGet("/api/windows", (WindowBroker broker) => Results.Ok(new
@@ -407,10 +413,10 @@ internal sealed class PortalServer : IAsyncDisposable
             }
 
             using var socket = await context.WebSockets.AcceptWebSocketAsync();
-            var broker = context.RequestServices.GetRequiredService<WindowBroker>();
             var logger = context.RequestServices.GetRequiredService<ILogger<WebRtcWindowStreamSession>>();
-            _logStore.AddInformation("webrtc", $"Accepted signaling socket for HWND {handle.Value}, {frameRate} fps, maxWidth={maxWidth?.ToString() ?? "auto"}, mode={streamMode.ToQueryValue()}, codec={videoCodecPreference.ToQueryValue()}.");
-            await using var session = new WebRtcWindowStreamSession(broker, handle.Value, maxWidth, frameRate, streamMode, videoCodecPreference, socket, logger);
+            _logStore.AddInformation("webrtc", $"Accepted signaling socket for HWND {handle.Value}, {frameRate} fps, maxWidth={maxWidth?.ToString() ?? "auto"}, mode={streamMode.ToQueryValue()}, codec={videoCodecPreference.ToQueryValue()}, backend={_webRtcStreamSessionFactory.BackendName}.");
+            var sessionOptions = new WebRtcStreamSessionOptions(handle.Value, maxWidth, frameRate, streamMode, videoCodecPreference, socket);
+            await using var session = _webRtcStreamSessionFactory.Create(sessionOptions, context.RequestServices);
 
             try
             {

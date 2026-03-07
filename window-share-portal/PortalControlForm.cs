@@ -18,6 +18,7 @@ internal sealed class PortalControlForm : Form
     private readonly Label _serverStateLabel;
     private readonly Label _machineNameLabel;
     private readonly Label _portLabel;
+    private readonly Label _backendLabel;
     private readonly Label _tokenSourceLabel;
     private readonly Label _settingsPathLabel;
     private readonly Button _connectionToggleButton;
@@ -84,7 +85,7 @@ internal sealed class PortalControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 7,
+            RowCount = 8,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
@@ -93,6 +94,7 @@ internal sealed class PortalControlForm : Form
         _serverStateLabel = CreateInfoLabel();
         _machineNameLabel = CreateInfoLabel();
         _portLabel = CreateInfoLabel();
+        _backendLabel = CreateInfoLabel();
         _tokenSourceLabel = CreateInfoLabel();
         _settingsPathLabel = CreateInfoLabel();
         _connectionToggleButton = new Button
@@ -115,8 +117,9 @@ internal sealed class PortalControlForm : Form
         serverLayout.Controls.Add(_serverStateLabel, 0, 0);
         serverLayout.Controls.Add(_machineNameLabel, 0, 1);
         serverLayout.Controls.Add(_portLabel, 0, 2);
-        serverLayout.Controls.Add(_tokenSourceLabel, 0, 3);
-        serverLayout.Controls.Add(_settingsPathLabel, 0, 4);
+        serverLayout.Controls.Add(_backendLabel, 0, 3);
+        serverLayout.Controls.Add(_tokenSourceLabel, 0, 4);
+        serverLayout.Controls.Add(_settingsPathLabel, 0, 5);
 
         var portRow = new FlowLayoutPanel
         {
@@ -132,7 +135,7 @@ internal sealed class PortalControlForm : Form
         });
         portRow.Controls.Add(_portTextBox);
         portRow.Controls.Add(_applyPortButton);
-        serverLayout.Controls.Add(portRow, 0, 5);
+        serverLayout.Controls.Add(portRow, 0, 6);
 
         var serverButtonRow = new FlowLayoutPanel
         {
@@ -140,7 +143,7 @@ internal sealed class PortalControlForm : Form
             AutoSize = true,
         };
         serverButtonRow.Controls.Add(_connectionToggleButton);
-        serverLayout.Controls.Add(serverButtonRow, 0, 6);
+        serverLayout.Controls.Add(serverButtonRow, 0, 7);
 
         var passwordGroup = new GroupBox
         {
@@ -413,6 +416,7 @@ internal sealed class PortalControlForm : Form
         SetControlText(_serverStateLabel, $"稼働状態: {(_server.IsRunning ? "Listening" : "Stopped")}");
         SetControlText(_machineNameLabel, $"ホスト名: {Environment.MachineName}");
         SetControlText(_portLabel, $"待受ポート: {_runtimeState.Port}");
+        SetControlText(_backendLabel, $"WebRTC backend: {_server.WebRtcBackendName}");
         SetControlText(_tokenSourceLabel, $"パスワードソース: {_runtimeState.TokenModeLabel}");
         SetControlText(_settingsPathLabel, $"設定ファイル: {_runtimeState.SettingsPath}");
         SetControlText(_connectionToggleButton, _server.IsRunning ? "接続をOFF" : "接続をON");

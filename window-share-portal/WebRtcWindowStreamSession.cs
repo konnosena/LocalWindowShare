@@ -8,7 +8,7 @@ using SIPSorcery.Net;
 using SIPSorceryMedia.Abstractions;
 using SIPSorceryMedia.Encoders;
 
-internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
+internal sealed class WebRtcWindowStreamSession : IWebRtcStreamSession
 {
     private const int MaxSignalMessageBytes = 128 * 1024;
     private static readonly JsonSerializerOptions SignalJsonOptions = new()
@@ -207,7 +207,17 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
 
         while (!cancellationToken.IsCancellationRequested && _socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
-            var result = await _socket.ReceiveAsync(buffer, cancellationToken);
+            WebSocketReceiveResult result;
+            try
+            {
+                result = await _socket.ReceiveAsync(buffer, cancellationToken);
+            }
+            catch (Exception ex) when (WebRtcTaskUtilities.IsExpectedSocketShutdown(ex))
+            {
+                _logger.LogInformation("Signaling socket receive loop ended for HWND {Handle}.", _currentWindowHandle);
+                break;
+            }
+
             if (result.MessageType == WebSocketMessageType.Close)
             {
                 _logger.LogInformation("Signaling socket closed by client for HWND {Handle}.", _currentWindowHandle);
@@ -328,7 +338,7 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
             }
         }
 
-        _ = Task.Run(async () =>
+        WebRtcTaskUtilities.StartObservedBackgroundTask(async () =>
         {
             try
             {
@@ -342,7 +352,7 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
             {
                 _logger.LogDebug(ex, "Failed to send local ICE candidate.");
             }
-        });
+        }, _logger, "sending local ICE candidate");
     }
 
     private void HandleConnectionStateChanged(RTCPeerConnectionState state)
@@ -380,7 +390,7 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
             _pendingLocalIceCandidatePayloads.Clear();
         }
 
-        _ = Task.Run(async () =>
+        WebRtcTaskUtilities.StartObservedBackgroundTask(async () =>
         {
             foreach (var payload in pendingPayloads)
             {
@@ -398,7 +408,7 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
                     _logger.LogDebug(ex, "Failed to send queued local ICE candidate.");
                 }
             }
-        }, _sessionCts.Token);
+        }, _logger, "flushing queued local ICE candidates");
     }
 
     private async Task CaptureLoopAsync(CancellationToken cancellationToken)
@@ -746,12 +756,26 @@ internal sealed class WebRtcWindowStreamSession : IAsyncDisposable
         }
 
         var bytes = Encoding.UTF8.GetBytes(payload);
-        await _socketSendLock.WaitAsync(cancellationToken);
+        try
+        {
+            await _socketSendLock.WaitAsync(cancellationToken);
+        }
+        catch (Exception ex) when (WebRtcTaskUtilities.IsExpectedSocketShutdown(ex))
+        {
+            return;
+        }
+
         try
         {
             if (_socket.State == WebSocketState.Open)
             {
-                await _socket.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
+                try
+                {
+                    await _socket.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
+                }
+                catch (Exception ex) when (WebRtcTaskUtilities.IsExpectedSocketShutdown(ex))
+                {
+                }
             }
         }
         finally

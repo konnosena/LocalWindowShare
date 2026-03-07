@@ -17,6 +17,7 @@ const DEFAULT_VIDEO_CODEC = "auto";
 const VIDEO_CODEC_STORAGE_KEY = "windowSharePortal.videoCodec";
 const FILTER_WT_STORAGE_KEY = "windowSharePortal.filterWindowsTerminal";
 const RESIZE_SCALE_STORAGE_KEY = "windowSharePortal.resizeScale";
+const LAST_WINDOW_STORAGE_KEY = "windowSharePortal.lastWindow";
 const DEFAULT_VIDEO_CODEC_UI_OPTIONS = Object.freeze([
     { value: "auto", label: "Auto", available: true, hint: "利用可能な codec の中から最適なものを使います。" },
     { value: "vp8", label: "VP8", available: true, hint: "互換性優先です。" },
@@ -93,6 +94,7 @@ const state = {
     savedWindowBounds: null,
     resizeBusy: false,
     resizeScale: loadResizeScalePreference(),
+    imeComposing: false,
 };
 
 const elements = {
@@ -183,7 +185,10 @@ function bindEvents() {
     elements.viewerWindowTitle.addEventListener("click", () => {
         toggleMobileResize().catch(showTransientError);
     });
+    elements.textInput.addEventListener("compositionstart", () => { state.imeComposing = true; });
+    elements.textInput.addEventListener("compositionend", () => { state.imeComposing = false; });
     elements.textForm.addEventListener("submit", (event) => {
+        if (state.imeComposing) { event.preventDefault(); return; }
         handleSendText(event).catch(showTransientError);
     });
     elements.frameRateSelect.addEventListener("change", handleFrameRateChange);
@@ -231,7 +236,7 @@ function bindEvents() {
 
     for (const button of elements.quickKeyButtons) {
         button.addEventListener("click", () => {
-            sendKey(button.dataset.key).catch(showTransientError);
+            sendKey(button.dataset.key);
         });
     }
 
@@ -548,7 +553,9 @@ async function refreshWindows(preserveSelection) {
     }
 
     if (payload.windows.length > 0) {
-        await selectWindow(payload.windows[0].handle, false);
+        const lastHandle = loadLastWindowPreference();
+        const lastWindow = lastHandle ? payload.windows.find((w) => w.handle === lastHandle) : null;
+        await selectWindow(lastWindow ? lastWindow.handle : payload.windows[0].handle, false);
         return;
     }
 
@@ -612,6 +619,7 @@ async function selectWindow(handle, closeMenuAfterSelection = true) {
 
     state.selectedHandle = handle;
     state.selectedWindow = await response.json();
+    saveLastWindowPreference(handle);
     renderSelection();
     highlightSelectedWindow();
     if (canSwitchLiveStream) {
@@ -1564,6 +1572,22 @@ function saveResizeScalePreference(value) {
     }
 }
 
+function loadLastWindowPreference() {
+    try {
+        const stored = window.localStorage.getItem(LAST_WINDOW_STORAGE_KEY);
+        return stored ? Number(stored) : null;
+    } catch {
+        return null;
+    }
+}
+
+function saveLastWindowPreference(handle) {
+    try {
+        window.localStorage.setItem(LAST_WINDOW_STORAGE_KEY, String(handle));
+    } catch {
+    }
+}
+
 function renderResizeScaleSelection() {
     if (elements.resizeScaleSelect) {
         elements.resizeScaleSelect.value = String(state.resizeScale);
@@ -1995,7 +2019,7 @@ function handleScrollPadPointerMove(event) {
 
     event.preventDefault();
     const previousY = state.scrollPadLastClientY ?? event.clientY;
-    const deltaY = event.clientY - previousY;
+    const deltaY = previousY - event.clientY;
     state.scrollPadLastClientY = event.clientY;
     handleScrollPadDeltaPixels(deltaY);
 }
@@ -2516,6 +2540,12 @@ async function handleSendText(event) {
 
     const text = elements.textInput.value;
     if (!text.trim()) {
+        await fetch(`/api/windows/${state.selectedHandle}/input/key`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key: "Enter" }),
+        });
         return;
     }
 
@@ -2537,26 +2567,21 @@ async function handleSendText(event) {
     scheduleNextFrame(getFrameIntervalMs());
 }
 
-async function sendKey(key) {
+function sendKey(key) {
     if (!state.selectedHandle) {
         return;
     }
 
-    const response = await fetch(`/api/windows/${state.selectedHandle}/input/key`, {
+    fetch(`/api/windows/${state.selectedHandle}/input/key`, {
         method: "POST",
         credentials: "same-origin",
-        headers: {
-            "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key }),
-    });
-
-    if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-    }
-
-    elements.viewerStatus.textContent = `${key} sent.`;
-    scheduleNextFrame(getFrameIntervalMs());
+    }).then((response) => {
+        if (response.ok) {
+            elements.viewerStatus.textContent = `${key} sent.`;
+        }
+    }).catch(() => {});
 }
 
 function handleGlobalKeyDown(event) {
