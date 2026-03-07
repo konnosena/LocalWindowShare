@@ -26,7 +26,7 @@ internal sealed record LaunchAppRequest(string App);
 
 internal sealed record ResizeWindowRequest(int Width, int Height);
 
-internal sealed record ResizeResult(OperationError? Error, WindowBounds PreviousBounds);
+internal sealed record ResizeResult(OperationError? Error, WindowBounds PreviousBounds, WindowBounds AppliedBounds);
 
 internal sealed record OperationError(int StatusCode, string Message);
 

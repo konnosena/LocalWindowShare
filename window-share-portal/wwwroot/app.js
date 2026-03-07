@@ -423,12 +423,10 @@ async function _doToggleMobileResize() {
             throw new Error(body.message || "Failed to restore window size.");
         }
 
-        if (state.selectedWindow?.bounds) {
-            state.selectedWindow.bounds = { ...bounds };
-            updateSelectedWindowPresentation();
-        }
+        const result = await response.json();
+        applySelectedWindowBounds(result.appliedBounds || bounds);
         state.savedWindowBounds = null;
-        elements.viewerStatus.textContent = `Restored to ${bounds.width}x${bounds.height}.`;
+        elements.viewerStatus.textContent = formatResizeStatus("Restored", result.appliedBounds || bounds, bounds);
     } else {
         const stageRect = elements.frameStage.getBoundingClientRect();
         const headerHeight = 44;
@@ -451,18 +449,44 @@ async function _doToggleMobileResize() {
         }
 
         const result = await response.json();
-        if (state.selectedWindow?.bounds) {
-            state.selectedWindow.bounds = {
-                ...state.selectedWindow.bounds,
-                width: targetWidth,
-                height: targetHeight,
-            };
-            updateSelectedWindowPresentation();
-        }
+        applySelectedWindowBounds(result.appliedBounds || { width: targetWidth, height: targetHeight });
         state.savedWindowBounds = result.previousBounds;
-        elements.viewerStatus.textContent = `Resized to ${targetWidth}x${targetHeight}.`;
+        elements.viewerStatus.textContent = formatResizeStatus("Resized", result.appliedBounds || { width: targetWidth, height: targetHeight }, { width: targetWidth, height: targetHeight });
     }
 
+}
+
+function applySelectedWindowBounds(bounds) {
+    if (!bounds || !state.selectedWindow?.bounds) {
+        return;
+    }
+
+    state.selectedWindow.bounds = {
+        ...state.selectedWindow.bounds,
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+    };
+    updateSelectedWindowPresentation();
+}
+
+function formatResizeStatus(action, appliedBounds, requestedBounds) {
+    if (!appliedBounds) {
+        return `${action}.`;
+    }
+
+    const appliedWidth = appliedBounds.width;
+    const appliedHeight = appliedBounds.height;
+    if (!requestedBounds) {
+        return `${action} to ${appliedWidth}x${appliedHeight}.`;
+    }
+
+    if (appliedWidth !== requestedBounds.width || appliedHeight !== requestedBounds.height) {
+        return `${action} to ${appliedWidth}x${appliedHeight} to fit the monitor.`;
+    }
+
+    return `${action} to ${appliedWidth}x${appliedHeight}.`;
 }
 
 async function launchApp(app) {

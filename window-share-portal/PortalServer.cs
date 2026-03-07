@@ -292,6 +292,13 @@ internal sealed class PortalServer : IAsyncDisposable
                     width = result.PreviousBounds.Width,
                     height = result.PreviousBounds.Height,
                 },
+                appliedBounds = new
+                {
+                    left = result.AppliedBounds.Left,
+                    top = result.AppliedBounds.Top,
+                    width = result.AppliedBounds.Width,
+                    height = result.AppliedBounds.Height,
+                },
             });
         });
 
