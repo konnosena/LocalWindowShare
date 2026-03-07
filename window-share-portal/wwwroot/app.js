@@ -86,6 +86,7 @@ const state = {
     drawerOpen: false,
     filterWindowsTerminal: loadFilterWtPreference(),
     savedWindowBounds: null,
+    resizeBusy: false,
 };
 
 const elements = {
@@ -389,9 +390,18 @@ async function handleLogout() {
 }
 
 async function toggleMobileResize() {
-    if (!state.selectedHandle) {
+    if (!state.selectedHandle || state.resizeBusy) {
         return;
     }
+    state.resizeBusy = true;
+    try {
+        await _doToggleMobileResize();
+    } finally {
+        state.resizeBusy = false;
+    }
+}
+
+async function _doToggleMobileResize() {
 
     if (state.savedWindowBounds) {
         const bounds = state.savedWindowBounds;
@@ -415,8 +425,8 @@ async function toggleMobileResize() {
         const scrollRailWidth = 32;
         const availableWidth = Math.floor(stageRect.width - scrollRailWidth);
         const availableHeight = Math.floor(stageRect.height - headerHeight);
-        const targetWidth = Math.max(300, Math.min(availableWidth, 600));
-        const targetHeight = Math.max(400, Math.min(availableHeight, 1200));
+        const targetWidth = Math.max(600, Math.min(availableWidth, 1200));
+        const targetHeight = Math.max(800, Math.min(availableHeight, 2400));
 
         const response = await fetch(`/api/windows/${state.selectedHandle}/resize`, {
             method: "POST",
