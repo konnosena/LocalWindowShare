@@ -23,7 +23,7 @@ const DEFAULT_VIDEO_CODEC_UI_OPTIONS = Object.freeze([
     { value: "auto", label: "Auto", available: true, hint: "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。" },
     { value: "vp8", label: "VP8", available: true, hint: "互換性優先です。" },
     { value: "vp9", label: "VP9", available: true, hint: "高効率です。profile-id=0 を優先して接続します。" },
-    { value: "av1", label: "AV1", available: false, hint: "現在のサーバービルドでは未対応です。" },
+    { value: "av1", label: "AV1", available: true, hint: "高圧縮です。profile=0 を優先して接続します。" },
 ]);
 const FRAME_WIDTH_CAPS_BY_MODE = Object.freeze({
     "low-latency": { 15: 1280, 30: 960, 45: 900, 60: 800 },
@@ -90,6 +90,7 @@ const state = {
     drawerOpen: false,
     activeStreamHandle: null,
     activeStreamMaxWidth: null,
+    av1Session: null,
     streamTargetSyncTimer: null,
     filterWindowsTerminal: loadFilterWtPreference(),
     savedWindowBounds: null,
@@ -853,6 +854,7 @@ function canSwitchActiveWebRtcStreamWithoutReconnect() {
     return Boolean(
         state.selectedHandle
         && state.webrtcConnected
+        && !state.av1Session
         && state.peerConnection
         && state.peerConnection.connectionState === "connected"
         && state.signalingSocket
@@ -861,6 +863,18 @@ function canSwitchActiveWebRtcStreamWithoutReconnect() {
 }
 
 function scheduleActiveStreamTargetSync() {
+    if (state.av1Session) {
+        if (state.streamTargetSyncTimer) {
+            window.clearTimeout(state.streamTargetSyncTimer);
+        }
+
+        state.streamTargetSyncTimer = window.setTimeout(() => {
+            state.streamTargetSyncTimer = null;
+            refreshFrameNow(false).catch(showTransientError);
+        }, 220);
+        return;
+    }
+
     if (!canSwitchActiveWebRtcStreamWithoutReconnect()) {
         return;
     }
@@ -927,7 +941,30 @@ async function ensureWebRtcSession(forceReconnect) {
 
     const selectedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
     const effectiveCodec = resolveEffectiveVideoCodecPreference(selectedCodec);
-    const currentKey = `${state.frameRate}:${state.streamMode}:${effectiveCodec}`;
+    const requestedWidth = getRequestedFrameWidth();
+    const usingAv1Backend = effectiveCodec === "av1";
+    const currentKey = usingAv1Backend
+        ? `av1:${state.selectedHandle}:${requestedWidth}:${state.frameRate}:${state.streamMode}:${effectiveCodec}`
+        : `${state.frameRate}:${state.streamMode}:${effectiveCodec}`;
+
+    if (usingAv1Backend) {
+        const isActive = state.webrtcConnected
+            && state.av1Session
+            && state.av1Session.streamKey === currentKey;
+
+        if (!forceReconnect && isActive) {
+            return;
+        }
+
+        const hadSession = Boolean(state.av1Session || state.peerConnection || state.signalingSocket);
+        await disconnectWebRtcSession({ clearVideo: forceReconnect });
+        if (hadSession) {
+            await wait(WEBRTC_RECONNECT_COOLDOWN_MS);
+        }
+        await connectAv1Session(requestedWidth, currentKey, selectedCodec, effectiveCodec);
+        return;
+    }
+
     const isActive = state.webrtcConnected
         && state.peerConnection
         && state.signalingSocket
@@ -940,13 +977,248 @@ async function ensureWebRtcSession(forceReconnect) {
         return;
     }
 
-    const requestedWidth = getRequestedFrameWidth();
     const hadSession = Boolean(state.peerConnection || state.signalingSocket);
     await disconnectWebRtcSession({ clearVideo: forceReconnect });
     if (hadSession) {
         await wait(WEBRTC_RECONNECT_COOLDOWN_MS);
     }
     await connectWebRtcSession(requestedWidth, currentKey, selectedCodec, effectiveCodec);
+}
+
+async function connectAv1Session(requestedWidth, streamKey, selectedCodec, effectiveCodec) {
+    if (!state.selectedHandle) {
+        return;
+    }
+
+    if (!window.GstWebRTCAPI) {
+        throw new Error("The GStreamer AV1 browser client is not loaded.");
+    }
+
+    logClientEvent("info", "Starting AV1 session.", {
+        handle: state.selectedHandle,
+        frameRate: state.frameRate,
+        maxWidth: requestedWidth,
+        streamMode: state.streamMode,
+        requestedCodec: selectedCodec,
+        effectiveCodec,
+    });
+
+    const response = await fetch("/api/av1/session", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            handle: state.selectedHandle,
+            maxWidth: requestedWidth,
+            frameRate: state.frameRate,
+            streamMode: state.streamMode,
+        }),
+    });
+
+    if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+    }
+
+    const sessionInfo = await response.json();
+    const generation = ++state.webrtcGeneration;
+    const av1Api = new window.GstWebRTCAPI({
+        meta: { client: "window-share-portal" },
+        signalingServerUrl: buildAv1SignalingUrl(sessionInfo.sessionId),
+        reconnectionTimeout: 0,
+        webrtcConfig: {
+            iceServers: [],
+        },
+    });
+    const av1Session = {
+        api: av1Api,
+        consumerSession: null,
+        connectionListener: null,
+        producersListener: null,
+        producerName: sessionInfo.producerName,
+        sessionId: sessionInfo.sessionId,
+        streamKey,
+    };
+
+    state.av1Session = av1Session;
+    state.webrtcConnected = false;
+    state.activeStreamHandle = state.selectedHandle;
+    state.activeStreamMaxWidth = requestedWidth;
+    elements.viewerStatus.textContent = `AV1 connecting... ${state.frameRate} fps · ${streamModeLabel(state.streamMode)}`;
+    elements.framePlaceholder.hidden = false;
+    elements.framePlaceholder.textContent = "AV1 backend connecting...";
+    elements.windowFrame.hidden = true;
+
+    const connected = new Promise((resolve, reject) => {
+        let settled = false;
+        let timeoutId = null;
+
+        const clearTimeoutOnce = () => {
+            if (timeoutId !== null) {
+                window.clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+        };
+        const resolveOnce = () => {
+            if (!settled) {
+                settled = true;
+                clearTimeoutOnce();
+                resolve();
+            }
+        };
+        const rejectOnce = (error) => {
+            if (!settled) {
+                settled = true;
+                clearTimeoutOnce();
+                reject(error);
+            }
+        };
+        const attachStream = async (stream) => {
+            if (generation !== state.webrtcGeneration || !(stream instanceof MediaStream)) {
+                return;
+            }
+
+            if (elements.windowFrame.srcObject !== stream) {
+                elements.windowFrame.srcObject = stream;
+            }
+
+            elements.windowFrame.hidden = false;
+            elements.framePlaceholder.hidden = true;
+
+            try {
+                await elements.windowFrame.play();
+            } catch {
+            }
+
+            state.webrtcConnected = true;
+            elements.viewerStatus.textContent = `AV1 live · ${state.frameRate} fps · ${streamModeLabel(state.streamMode)} · ${describeCodecPreference(selectedCodec, effectiveCodec)}`;
+            updateFrameCursor(state.cursorRatio ?? { x: 0.5, y: 0.5 }, { style: cursorStyleForCurrentState(), pressed: isPressedCursor() });
+            syncFrameTransform();
+            resolveOnce();
+        };
+        const connectConsumer = (producer) => {
+            if (generation !== state.webrtcGeneration || av1Session.consumerSession || !producer) {
+                return;
+            }
+
+            const consumerSession = av1Api.createConsumerSession(producer.id);
+            if (!consumerSession) {
+                rejectOnce(new Error("Failed to create the AV1 consumer session."));
+                return;
+            }
+
+            av1Session.consumerSession = consumerSession;
+            consumerSession.addEventListener("error", (event) => {
+                logClientEvent("error", "AV1 consumer session failed.", {
+                    message: event.error?.message || event.message || "unknown AV1 consumer error",
+                });
+                rejectOnce(normalizeError(event.error || new Error(event.message || "AV1 consumer session failed."), "Failed to establish the AV1 stream."));
+            });
+            consumerSession.addEventListener("streamsChanged", () => {
+                logClientEvent("info", "AV1 consumer streams changed.", {
+                    streamCount: Array.isArray(consumerSession.streams) ? consumerSession.streams.length : 0,
+                });
+                const stream = Array.isArray(consumerSession.streams) ? consumerSession.streams[0] : null;
+                if (stream) {
+                    attachStream(stream).catch(() => {
+                    });
+                }
+            });
+            consumerSession.addEventListener("closed", () => {
+                logClientEvent("warning", "AV1 consumer session closed.", {
+                    producerName: av1Session.producerName,
+                });
+                if (generation === state.webrtcGeneration && !state.webrtcConnected) {
+                    rejectOnce(new Error("AV1 consumer session closed before the stream was ready."));
+                }
+            });
+
+            logClientEvent("info", "Connecting AV1 consumer session.", {
+                producerId: producer.id,
+                producerName: av1Session.producerName,
+            });
+            if (!consumerSession.connect()) {
+                rejectOnce(new Error("Failed to connect the AV1 consumer session."));
+            }
+        };
+
+        av1Session.connectionListener = {
+            connected(clientId) {
+                logClientEvent("info", "AV1 signaling connected.", {
+                    clientId,
+                    sessionId: av1Session.sessionId,
+                });
+                const producer = av1Api.getAvailableProducers()
+                    .find((current) => current?.meta?.name === av1Session.producerName);
+                if (producer) {
+                    connectConsumer(producer);
+                }
+            },
+            disconnected() {
+                logClientEvent("warning", "AV1 signaling disconnected.", {
+                    sessionId: av1Session.sessionId,
+                });
+                state.webrtcConnected = false;
+                if (generation === state.webrtcGeneration && !state.webrtcConnected) {
+                    rejectOnce(new Error("AV1 signaling disconnected before the stream was ready."));
+                }
+            },
+        };
+        av1Session.producersListener = {
+            producerAdded(producer) {
+                logClientEvent("info", "AV1 producer available.", {
+                    producerId: producer?.id ?? null,
+                    producerName: producer?.meta?.name ?? null,
+                });
+                if (producer?.meta?.name === av1Session.producerName) {
+                    connectConsumer(producer);
+                }
+            },
+            producerRemoved(producer) {
+                logClientEvent("info", "AV1 producer removed.", {
+                    producerId: producer?.id ?? null,
+                    producerName: producer?.meta?.name ?? null,
+                });
+            },
+        };
+
+        av1Api.registerConnectionListener(av1Session.connectionListener);
+        av1Api.registerProducersListener(av1Session.producersListener);
+
+        timeoutId = window.setTimeout(() => {
+            rejectOnce(new Error("Timed out waiting for the AV1 producer."));
+        }, 12000);
+    });
+
+    elements.windowFrame.addEventListener("loadedmetadata", async () => {
+        logClientEvent("info", "Remote video metadata loaded.", {
+            width: elements.windowFrame.videoWidth,
+            height: elements.windowFrame.videoHeight,
+        });
+        if (generation !== state.webrtcGeneration) {
+            return;
+        }
+
+        elements.windowFrame.hidden = false;
+        elements.framePlaceholder.hidden = true;
+        try {
+            await elements.windowFrame.play();
+        } catch {
+        }
+    }, { once: true });
+
+    try {
+        await connected;
+    } catch (error) {
+        if (generation === state.webrtcGeneration) {
+            logClientEvent("error", "Failed to establish the AV1 stream.", {
+                message: error?.message || String(error),
+            });
+            await disconnectWebRtcSession({ clearVideo: true });
+            throw normalizeError(error, "Failed to establish the AV1 stream.");
+        }
+    }
 }
 
 async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec, effectiveCodec) {
@@ -1236,10 +1508,39 @@ async function disconnectWebRtcSession(options = {}) {
     state.activeStreamHandle = null;
     state.activeStreamMaxWidth = null;
 
+    const av1Session = state.av1Session;
     const peerConnection = state.peerConnection;
     const signalingSocket = state.signalingSocket;
+    state.av1Session = null;
     state.peerConnection = null;
     state.signalingSocket = null;
+
+    if (av1Session) {
+        try {
+            av1Session.consumerSession?.close();
+        } catch {
+        }
+        try {
+            av1Session.api?.unregisterAllConnectionListeners?.();
+            av1Session.api?.unregisterAllProducersListeners?.();
+        } catch {
+        }
+        try {
+            av1Session.api?._channel?.close?.();
+        } catch {
+        }
+        await fetch("/api/av1/session/stop", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                sessionId: av1Session.sessionId,
+            }),
+        }).catch(() => {
+        });
+    }
 
     if (peerConnection) {
         try {
@@ -1365,12 +1666,15 @@ function codecMatchesPreference(codec, codecPreference) {
         return false;
     }
 
-    if (codecPreference !== "vp9") {
-        return true;
-    }
-
     const fmtp = typeof codec?.sdpFmtpLine === "string" ? codec.sdpFmtpLine.toLowerCase() : "";
-    return fmtp.length === 0 || fmtp.includes("profile-id=0");
+    switch (codecPreference) {
+        case "vp9":
+            return fmtp.length === 0 || fmtp.includes("profile-id=0");
+        case "av1":
+            return fmtp.length === 0 || fmtp.includes("profile=0");
+        default:
+            return true;
+    }
 }
 
 function resolveEffectiveVideoCodecPreference(codecPreference, options = getVideoCodecUiOptions()) {
@@ -1395,6 +1699,13 @@ function describeCodecPreference(requestedCodec, effectiveCodec) {
     return requestedCodec === "auto"
         ? `Auto→${videoCodecLabel(effectiveCodec)}`
         : videoCodecLabel(effectiveCodec);
+}
+
+function buildAv1SignalingUrl(sessionId) {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = new URL(`${protocol}//${window.location.host}/ws/av1-signaling`);
+    url.searchParams.set("sessionId", sessionId);
+    return url.toString();
 }
 
 function buildWebRtcUrl(handle, maxWidth, frameRate, streamMode, codecPreference) {
