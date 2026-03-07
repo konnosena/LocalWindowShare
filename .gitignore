@@ -1,0 +1,16 @@
+# .NET build output
+**/bin/
+**/obj/
+
+# Local tooling caches
+.dotnet/
+.dotnet-home/
+window-share-portal/.dotnet/
+window-share-portal/.dotnet-home/
+
+# Local verification and scratch data
+window-share-portal/.verify/
+window-share-portal/.scratch-api/
+
+# Runtime logs
+window-share-portal/logs/
