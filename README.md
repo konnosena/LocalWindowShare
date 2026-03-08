@@ -32,10 +32,10 @@ Claude Code、Codex、Gemini CLI などのコーディング CLI を、トイレ
 
 ```powershell
 # ビルド
-dotnet build window-share-portal/WindowSharePortal.csproj -c Release
+dotnet build local-window-share/LocalWindowShare.csproj -c Release
 
 # 実行
-.\window-share-portal\bin\Release\net10.0-windows10.0.19041.0\WindowSharePortal.exe
+.\local-window-share\bin\Release\net10.0-windows10.0.19041.0\LocalWindowShare.exe
 ```
 
 起動すると WPF の管理ウィンドウが開き、サーバーが自動的に開始されます。
@@ -45,7 +45,7 @@ dotnet build window-share-portal/WindowSharePortal.csproj -c Release
 
 ```powershell
 $env:WINDOW_SHARE_PORTAL_PORT = "48341"
-.\window-share-portal\bin\Release\net10.0-windows10.0.19041.0\WindowSharePortal.exe
+.\local-window-share\bin\Release\net10.0-windows10.0.19041.0\LocalWindowShare.exe
 ```
 
 ## 使い方
@@ -75,7 +75,7 @@ $env:WINDOW_SHARE_PORTAL_PORT = "48341"
 - **トークン認証**: ログイン後は 12 時間のセッション Cookie で管理
 - **DPAPI 暗号化**: 保存パスワードは Windows の現在ユーザー向け DPAPI で保護
 - **クライアント承認**: 新規クライアントは管理者の明示的な許可が必要 (無効化可能)
-- **設定保存先**: `%LOCALAPPDATA%\WindowSharePortal\settings.json`
+- **設定保存先**: `%LOCALAPPDATA%\LocalWindowShare\settings.json`
 
 ## 既知の制限
 

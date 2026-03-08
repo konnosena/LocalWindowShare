@@ -108,7 +108,7 @@ internal static class Program
         var current = new DirectoryInfo(baseDirectory);
         while (current is not null)
         {
-            var projectFilePath = Path.Combine(current.FullName, "WindowSharePortal.csproj");
+            var projectFilePath = Path.Combine(current.FullName, "LocalWindowShare.csproj");
             var webRootPath = Path.Combine(current.FullName, "wwwroot");
             if (File.Exists(projectFilePath) && Directory.Exists(webRootPath))
             {

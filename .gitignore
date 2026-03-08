@@ -6,17 +6,17 @@
 .dotnet/
 .dotnet-home/
 **/.dotnet-cli/
-window-share-portal/.dotnet/
-window-share-portal/.dotnet-home/
+local-window-share/.dotnet/
+local-window-share/.dotnet-home/
 
 # Local verification and scratch data
 .verify/
 .scratch-mrwebrtc-probe/
-window-share-portal/.verify/
-window-share-portal/.scratch-api/
+local-window-share/.verify/
+local-window-share/.scratch-api/
 
 # Runtime logs
-window-share-portal/logs/
+local-window-share/logs/
 
 # IDE and local machine state
 .vs/

@@ -11,7 +11,7 @@
 ## Run
 
 ```powershell
-.\window-share-portal\bin\Release\net10.0-windows\WindowSharePortal.exe
+.\local-window-share\bin\Release\net10.0-windows\LocalWindowShare.exe
 ```
 
 起動すると GUI が開き、そこで次を確認・変更できます。
@@ -24,10 +24,10 @@
 
 ```powershell
 $env:WINDOW_SHARE_PORTAL_PORT = "48341"
-.\window-share-portal\bin\Release\net10.0-windows\WindowSharePortal.exe
+.\local-window-share\bin\Release\net10.0-windows\LocalWindowShare.exe
 ```
 
-既存の `start-window-share-portal.cmd` を使っても、内部では Release ビルド済みの EXE を起動します。
+既存の `start-local-window-share.cmd` を使っても、内部では Release ビルド済みの EXE を起動します。
 
 待受アドレスは起動時に自動判定され、次だけに限定されます。
 
@@ -45,7 +45,7 @@ $env:WINDOW_SHARE_PORTAL_PORT = "48341"
 
 - このツールは信頼済みのローカルネットワーク / VPN 専用です。既定では TLS は有効化していません。
 - 共有トークンはログイン時にだけ使い、その後は 12 時間のセッション Cookie で認証します。
-- GUI で保存した共有トークンは `%LOCALAPPDATA%\\WindowSharePortal\\settings.json` に、Windows の現在ユーザー向け DPAPI で暗号化して保存します。
+- GUI で保存した共有トークンは `%LOCALAPPDATA%\\LocalWindowShare\\settings.json` に、Windows の現在ユーザー向け DPAPI で暗号化して保存します。
 - `logs/`, `bin/`, `obj/`, `.verify/`, `.scratch-api/`, `.dotnet/` はローカル生成物です。Git へ含めないでください。
 
 ## Important limitations

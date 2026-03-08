@@ -16,7 +16,7 @@ internal sealed class PortalSettingsStore
     {
         _settingsPath = settingsPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WindowSharePortal",
+            "LocalWindowShare",
             "settings.json");
     }
 
