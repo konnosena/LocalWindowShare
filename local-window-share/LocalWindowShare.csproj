@@ -32,4 +32,13 @@
       DestinationFolder="$(OutDir)"
       SkipUnchangedFiles="true" />
   </Target>
+  <Target Name="IncludeMrWebRtcInPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish
+        Include="$(PkgMicrosoft_MixedReality_WebRTC)\\runtimes\\win10-x64\\native\\mrwebrtc.dll"
+        Condition="Exists('$(PkgMicrosoft_MixedReality_WebRTC)\\runtimes\\win10-x64\\native\\mrwebrtc.dll')"
+        RelativePath="mrwebrtc.dll"
+        IsNative="true" />
+    </ItemGroup>
+  </Target>
 </Project>
