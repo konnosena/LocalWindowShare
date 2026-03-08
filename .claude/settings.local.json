@@ -17,7 +17,11 @@
       "Bash(ls:*)",
       "Bash(taskkill:*)",
       "Bash(start:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(magick:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(dotnet:*)"
     ]
   }
 }

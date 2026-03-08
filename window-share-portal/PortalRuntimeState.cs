@@ -222,6 +222,29 @@ internal sealed class PortalRuntimeState
             current.AllowedNetworks));
     }
 
+    public void AddManualAllowedNetwork(string cidr)
+    {
+        var normalized = NetworkAccessPolicy.NormalizeAllowedNetworkOrThrow(cidr);
+        var current = ManualAccessRules;
+        if (current.AllowedNetworks.Any(n => string.Equals(n, normalized, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        UpdateManualAccessRules(new PortalManualAccessRules(
+            current.BindAddresses,
+            current.AllowedAddresses,
+            current.AllowedNetworks.Append(normalized).ToArray()));
+    }
+
+    public void RemoveManualAllowedNetwork(string cidr)
+    {
+        var current = ManualAccessRules;
+        UpdateManualAccessRules(new PortalManualAccessRules(
+            current.BindAddresses,
+            current.AllowedAddresses,
+            current.AllowedNetworks
+                .Where(n => !string.Equals(n, cidr, StringComparison.OrdinalIgnoreCase))
+                .ToArray()));
+    }
 
     private static string[] SetEnabledState(IEnumerable<string> currentDisabledValues, string rawValue, bool isEnabled)
     {
