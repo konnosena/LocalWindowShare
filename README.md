@@ -1,24 +1,18 @@
 # Window Share Portal
 
 Windows PC の画面をスマートフォンやタブレットからリアルタイムで閲覧・操作する Web ポータルです。
-ローカルネットワークまたは VPN 経由で、ブラウザだけで利用できます。
+ローカルネットワークまたは VPN 経由で利用することを目的にブラウザだけで利用できます。
 
 ## 主な機能
 
 - **ウィンドウ単位のキャプチャ**: トップレベルウィンドウを列挙し、選択したウィンドウだけを配信
-- **WebRTC リアルタイムストリーミング**: VP8 / VP9 / AV1 コーデック対応
+- **WebRTC リアルタイムストリーミング**: VP8 / VP9 コーデック対応
 - **リモート入力**: タップ(クリック)、ダブルクリック、長押し(右クリック)、テキスト入力、キー送信、スクロール、ドラッグ
 - **ピンチズーム**: 二本指操作で画面の拡大・縮小
 - **クライアント承認**: 新規接続は管理画面でインライン承認、承認済みリスト管理、全許可モード
 - **ネットワーク制限**: ローカル / VPN アドレスのみに自動 bind。外部からのアクセスを遮断
 - **トークン認証**: パスワードでログイン、セッション Cookie で継続認証
 - **WPF 管理 GUI**: 接続状況、ネットワーク設定、承認管理、ログをダークテーマ UI で表示
-
-## スクリーンショット
-
-| 管理 GUI (WPF) | モバイル Web UI |
-|:-:|:-:|
-| *起動後の管理画面* | *スマホブラウザからの操作画面* |
 
 ## 必要環境
 
@@ -64,47 +58,6 @@ $env:WINDOW_SHARE_PORTAL_PORT = "48341"
 | 長押し → ドラッグ | ドラッグ&ドロップ |
 | 二本指ピンチ | ズーム |
 | 二本指スクロール | スクロール |
-
-## アーキテクチャ
-
-```
-┌─────────────────────────────────┐
-│  WPF GUI (MainWindow)          │  管理画面・承認・設定
-├─────────────────────────────────┤
-│  ASP.NET Core (Kestrel)        │  REST API / WebSocket
-├──────────────┬──────────────────┤
-│  WindowBroker│ WebRTC Session   │  キャプチャ / ストリーミング
-│  (Win32 API) │ (SIPSorcery)     │
-└──────────────┴──────────────────┘
-        ↕                ↕
-   PrintWindow       WebSocket
-   CopyFromScreen    シグナリング
-   WGC (Direct3D)
-```
-
-### 技術スタック
-
-| 層 | 技術 |
-|---|---|
-| ランタイム | .NET 10 |
-| Web サーバー | ASP.NET Core Minimal API (Kestrel) |
-| GUI | WPF (Windows Presentation Foundation) |
-| WebRTC | SIPSorcery + SIPSorceryMedia.Encoders / MixedReality.WebRTC |
-| キャプチャ | Windows Graphics Capture API, PrintWindow, CopyFromScreen |
-| 入力注入 | Win32 SendInput |
-| フロントエンド | Vanilla JavaScript (フレームワーク不使用) |
-
-### 主要クラス
-
-| クラス | 役割 |
-|---|---|
-| `PortalServer` | Kestrel サーバー管理、API ルート定義、認証 |
-| `WindowBroker` | ウィンドウ列挙・キャプチャ・入力送信 |
-| `WebRtcWindowStreamSession` | WebRTC ビデオ配信セッション |
-| `ClientApprovalService` | クライアント承認フロー管理 |
-| `NetworkAccessPolicy` | bind アドレス / 許可ネットワーク自動判定 |
-| `PortalRuntimeState` | ランタイム状態管理 (スレッドセーフ) |
-| `MainWindow` | WPF 管理 GUI |
 
 ## セキュリティ
 
