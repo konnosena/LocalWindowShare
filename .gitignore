@@ -28,3 +28,6 @@ window-share-portal/logs/
 # Test and publish output
 **/TestResults/
 **/artifacts/
+
+.claude/
+CLAUDE.md
