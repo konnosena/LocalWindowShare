@@ -21,7 +21,8 @@ const LAST_WINDOW_STORAGE_KEY = "windowSharePortal.lastWindow";
 const LOOP_SELECTION_STORAGE_KEY = "windowSharePortal.loopSelection";
 const TOUCH_MODE_STORAGE_KEY = "windowSharePortal.touchMode";
 const DIRECT_TAP_HOLD_MS = 400;
-const DIRECT_SCROLL_GAIN = 2.5;
+const DIRECT_SCROLL_GAIN = 2;
+const TITLE_FLICK_THRESHOLD = 40;
 const DEFAULT_VIDEO_CODEC_UI_OPTIONS = Object.freeze([
     { value: "auto", label: "Auto", available: true, hint: "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。" },
     { value: "vp8", label: "VP8", available: true, hint: "互換性優先です。" },
@@ -155,6 +156,8 @@ const elements = {
     selectWtButton: document.getElementById("select-wt-button"),
     selectNoneButton: document.getElementById("select-none-button"),
     resizeScaleSelect: document.getElementById("resize-scale-select"),
+    resizeToggleButton: document.getElementById("resize-toggle-button"),
+    titleBar: document.querySelector(".title-bar"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -207,7 +210,7 @@ function bindEvents() {
     elements.frameRefreshButton.addEventListener("click", () => {
         refreshFrameNow(true).catch(showTransientError);
     });
-    elements.viewerWindowTitle.addEventListener("click", () => {
+    elements.resizeToggleButton.addEventListener("click", () => {
         toggleMobileResize().catch(showTransientError);
     });
     elements.textInput.addEventListener("compositionstart", () => { state.imeComposing = true; });
@@ -227,6 +230,33 @@ function bindEvents() {
         button.addEventListener("click", () => {
             handleVideoCodecChange(button.dataset.videoCodec).catch(showTransientError);
         });
+    }
+
+    // Title bar flick to switch windows
+    {
+        let startX = 0;
+        let startY = 0;
+        let active = false;
+        elements.titleBar.addEventListener("touchstart", (e) => {
+            if (e.touches.length !== 1) return;
+            active = true;
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        }, { passive: true });
+        elements.titleBar.addEventListener("touchmove", (e) => {
+            if (active) e.preventDefault();
+        }, { passive: false });
+        elements.titleBar.addEventListener("touchend", (e) => {
+            if (!active) return;
+            active = false;
+            const touch = e.changedTouches[0];
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            if (Math.abs(dx) > TITLE_FLICK_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+                selectAdjacentWindow(dx < 0 ? 1 : -1).catch(showTransientError);
+            }
+        }, { passive: true });
+        elements.titleBar.addEventListener("touchcancel", () => { active = false; }, { passive: true });
     }
 
     elements.windowFrame.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -501,6 +531,7 @@ async function _doToggleMobileResize() {
         const result = await response.json();
         applySelectedWindowBounds(result.appliedBounds || bounds);
         state.savedWindowBounds = null;
+        elements.resizeToggleButton.classList.remove("active");
         elements.viewerStatus.textContent = formatResizeStatus("Restored", result.appliedBounds || bounds, bounds);
     } else {
         const scale = state.resizeScale;
@@ -527,6 +558,7 @@ async function _doToggleMobileResize() {
         const result = await response.json();
         applySelectedWindowBounds(result.appliedBounds || { width: targetWidth, height: targetHeight });
         state.savedWindowBounds = result.previousBounds;
+        elements.resizeToggleButton.classList.add("active");
         elements.viewerStatus.textContent = formatResizeStatus("Resized", result.appliedBounds || { width: targetWidth, height: targetHeight }, { width: targetWidth, height: targetHeight });
     }
 
@@ -842,6 +874,7 @@ function renderSelection() {
     updateSelectedWindowPresentation();
     elements.activateButton.disabled = false;
     elements.frameRefreshButton.disabled = false;
+    elements.resizeToggleButton.disabled = (state.selectedHandle < 0);
     elements.textInput.disabled = false;
     elements.textSubmit.disabled = false;
     for (const button of elements.quickKeyButtons) {
@@ -891,6 +924,8 @@ function resetSelection() {
     elements.viewerWindowTitle.textContent = "No window selected";
     elements.activateButton.disabled = true;
     elements.frameRefreshButton.disabled = true;
+    elements.resizeToggleButton.disabled = true;
+    elements.resizeToggleButton.classList.remove("active");
     state.savedWindowBounds = null;
     elements.textInput.disabled = true;
     elements.textSubmit.disabled = true;
@@ -1814,6 +1849,37 @@ function saveLoopSelection() {
     }
 }
 
+function loadTouchModePreference() {
+    try {
+        const v = window.localStorage.getItem(TOUCH_MODE_STORAGE_KEY);
+        return v === "direct" ? "direct" : "pointer";
+    } catch {
+        return "pointer";
+    }
+}
+
+function saveTouchModePreference(mode) {
+    try {
+        window.localStorage.setItem(TOUCH_MODE_STORAGE_KEY, mode);
+    } catch {
+    }
+}
+
+function setTouchMode(mode) {
+    state.touchMode = mode;
+    saveTouchModePreference(mode);
+    applyTouchModeUI();
+}
+
+function applyTouchModeUI() {
+    const isDirect = state.touchMode === "direct";
+    elements.touchModePointerButton.classList.toggle("active", !isDirect);
+    elements.touchModeDirectButton.classList.toggle("active", isDirect);
+    elements.scrollPad.style.display = isDirect ? "none" : "";
+    elements.scrollPadLeft.style.display = isDirect ? "none" : "";
+    elements.frameCursor.hidden = isDirect || !state.cursorRatio;
+}
+
 function loadResizeScalePreference() {
     try {
         const stored = Number(window.localStorage.getItem(RESIZE_SCALE_STORAGE_KEY));
@@ -1955,6 +2021,11 @@ async function handleFrameTouchStart(event) {
         return;
     }
 
+    if (state.touchMode === "direct") {
+        handleDirectTouchStart(event);
+        return;
+    }
+
     if (event.touches.length >= 2) {
         event.preventDefault();
         await startOrUpdateTwoFingerScroll(event.touches);
@@ -1991,6 +2062,11 @@ async function handleFrameTouchStart(event) {
 
 async function handleFrameTouchMove(event) {
     if (!state.selectedHandle || elements.windowFrame.hidden) {
+        return;
+    }
+
+    if (state.touchMode === "direct") {
+        handleDirectTouchMove(event);
         return;
     }
 
@@ -2045,6 +2121,11 @@ async function handleFrameTouchMove(event) {
 
 async function handleFrameTouchEnd(event) {
     if (!state.selectedHandle || elements.windowFrame.hidden) {
+        return;
+    }
+
+    if (state.touchMode === "direct") {
+        handleDirectTouchEnd(event);
         return;
     }
 
@@ -2106,6 +2187,11 @@ async function handleFrameTouchEnd(event) {
 
 function handleFrameTouchCancel(event) {
     if (!state.selectedHandle || elements.windowFrame.hidden) {
+        return;
+    }
+
+    if (state.touchMode === "direct") {
+        handleDirectTouchCancel(event);
         return;
     }
 
@@ -2225,6 +2311,241 @@ function finishTwoFingerGesture() {
     state.pointerLastClientPoint = null;
     state.scrollCarry = 0;
     updateFrameCursor(state.cursorRatio, { style: cursorStyleForCurrentState(), pressed: false });
+    elements.viewerStatus.textContent = `Zoom ${Math.round(state.frameScale * 100)}%.`;
+    scheduleNextFrame(getFrameIntervalMs());
+}
+
+// --- Direct Touch Mode ---
+
+function handleDirectTouchStart(event) {
+    if (event.touches.length >= 2) {
+        event.preventDefault();
+        cancelDirectTouch();
+        startDirectTwoFingerPan(event.touches);
+        return;
+    }
+
+    if (event.touches.length !== 1) return;
+
+    const touch = event.touches[0];
+    event.preventDefault();
+
+    const ratio = getFrameRatiosFromClient(touch.clientX, touch.clientY);
+    if (!ratio) return;
+
+    cancelDirectTouch();
+    state.directTouchId = touch.identifier;
+    state.directTouchStartPoint = pointFromTouch(touch);
+    state.directTouchStartRatio = ratio;
+    state.directTouchMode = null;
+    state.pointerLastClientPoint = pointFromTouch(touch);
+    state.cursorRatio = ratio;
+    state.scrollCarry = 0;
+
+    state.directTouchHoldTimer = window.setTimeout(() => {
+        if (state.directTouchMode === null && state.directTouchId !== null) {
+            state.directTouchMode = "drag";
+            sendPointerAction("move", state.directTouchStartRatio).catch(showTransientError);
+            sendPointerAction("down", state.directTouchStartRatio).catch(showTransientError);
+            elements.viewerStatus.textContent = "Drag started.";
+        }
+    }, DIRECT_TAP_HOLD_MS);
+}
+
+function handleDirectTouchMove(event) {
+    if (state.touchTwoFingerScroll && event.touches.length >= 2) {
+        event.preventDefault();
+        updateDirectTwoFingerPan(event.touches);
+        return;
+    }
+
+    if (event.touches.length >= 2) {
+        event.preventDefault();
+        cancelDirectTouch();
+        startDirectTwoFingerPan(event.touches);
+        return;
+    }
+
+    const touch = findDirectTouch(event.touches);
+    if (!touch) return;
+
+    event.preventDefault();
+    const point = pointFromTouch(touch);
+    const prev = state.pointerLastClientPoint ?? point;
+    state.pointerLastClientPoint = point;
+
+    if (state.directTouchMode === null) {
+        const dist = distanceBetween(point, state.directTouchStartPoint ?? point);
+        if (dist < TOUCH_MOVE_THRESHOLD) return;
+        // 移動開始 → スクロールモード
+        state.directTouchMode = "scroll";
+        if (state.directTouchHoldTimer) {
+            clearTimeout(state.directTouchHoldTimer);
+            state.directTouchHoldTimer = null;
+        }
+    }
+
+    if (state.directTouchMode === "scroll") {
+        const deltaY = prev.y - point.y;
+        handleScrollDeltaPixels(deltaY * DIRECT_SCROLL_GAIN);
+        return;
+    }
+
+    if (state.directTouchMode === "drag") {
+        const ratio = getFrameRatiosFromClient(point.x, point.y);
+        if (ratio) {
+            queuePointerMove(ratio);
+        }
+    }
+}
+
+function handleDirectTouchEnd(event) {
+    if (state.touchTwoFingerScroll) {
+        event.preventDefault();
+        if (event.touches.length < 2) {
+            finishDirectTwoFingerPan();
+        }
+        return;
+    }
+
+    const ended = findDirectTouchInList(event.changedTouches);
+    if (!ended) return;
+
+    event.preventDefault();
+    const mode = state.directTouchMode;
+    const ratio = state.directTouchStartRatio;
+
+    if (state.directTouchHoldTimer) {
+        clearTimeout(state.directTouchHoldTimer);
+        state.directTouchHoldTimer = null;
+    }
+
+    if (mode === "drag" && ratio) {
+        const finalRatio = getFrameRatiosFromClient(ended.clientX, ended.clientY) || ratio;
+        sendPointerAction("up", finalRatio).catch(showTransientError);
+        elements.viewerStatus.textContent = "Drag finished.";
+    } else if (mode === "scroll") {
+        elements.viewerStatus.textContent = "Scroll finished.";
+    } else if (mode === null && ratio) {
+        // タップ判定
+        handleDirectTap(ratio);
+    }
+
+    clearDirectTouchState();
+    scheduleNextFrame(getFrameIntervalMs());
+}
+
+function handleDirectTouchCancel(event) {
+    event.preventDefault();
+    if (state.directTouchMode === "drag" && state.directTouchStartRatio) {
+        sendPointerAction("up", state.directTouchStartRatio).catch(showTransientError);
+    }
+    cancelDirectTouch();
+    if (state.touchTwoFingerScroll) {
+        finishDirectTwoFingerPan();
+    }
+    scheduleNextFrame(getFrameIntervalMs());
+}
+
+function handleDirectTap(ratio) {
+    const now = Date.now();
+    const prevRatio = state.directTouchTapRatio;
+    const elapsed = now - state.directTouchTapTime;
+
+    if (prevRatio && elapsed < DOUBLE_TAP_DELAY_MS) {
+        const threshold = getDoubleTapDistanceThresholdRatio();
+        if (distanceBetween(prevRatio, ratio) <= threshold) {
+            // ダブルタップ → 右クリック
+            state.directTouchTapTime = 0;
+            state.directTouchTapRatio = null;
+            sendPointerAction("click", ratio, { button: "right" }).catch(showTransientError);
+            elements.viewerStatus.textContent = "Right click sent.";
+            return;
+        }
+    }
+
+    // シングルタップ → 左クリック
+    state.directTouchTapTime = now;
+    state.directTouchTapRatio = ratio;
+    sendPointerAction("move", ratio).catch(showTransientError);
+    sendPointerAction("click", ratio, { button: "left" }).catch(showTransientError);
+    elements.viewerStatus.textContent = "Click sent.";
+}
+
+function cancelDirectTouch() {
+    if (state.directTouchHoldTimer) {
+        clearTimeout(state.directTouchHoldTimer);
+        state.directTouchHoldTimer = null;
+    }
+    clearDirectTouchState();
+}
+
+function clearDirectTouchState() {
+    state.directTouchId = null;
+    state.directTouchStartPoint = null;
+    state.directTouchStartRatio = null;
+    state.directTouchMode = null;
+    state.pointerLastClientPoint = null;
+    state.scrollCarry = 0;
+}
+
+function findDirectTouch(touches) {
+    if (state.directTouchId === null) return null;
+    for (let i = 0; i < touches.length; i++) {
+        if (touches[i].identifier === state.directTouchId) return touches[i];
+    }
+    return null;
+}
+
+function findDirectTouchInList(touchList) {
+    if (state.directTouchId === null) return null;
+    for (let i = 0; i < touchList.length; i++) {
+        if (touchList[i].identifier === state.directTouchId) return touchList[i];
+    }
+    return null;
+}
+
+// --- Direct Touch: Two-finger pan (no constrain, free pan) ---
+
+function startDirectTwoFingerPan(touches) {
+    cancelDirectTouch();
+    state.touchTwoFingerScroll = true;
+    state.touchTwoFingerMode = "pan";
+    state.touchLastCenterPoint = getTouchCenterPoint(touches);
+    state.touchLastDistance = getTouchDistance(touches);
+}
+
+function updateDirectTwoFingerPan(touches) {
+    const centerPoint = getTouchCenterPoint(touches);
+    const distance = getTouchDistance(touches);
+    if (!centerPoint || !distance) return;
+
+    const prev = state.touchLastCenterPoint ?? centerPoint;
+    const prevDist = state.touchLastDistance ?? distance;
+    state.touchLastCenterPoint = centerPoint;
+    state.touchLastDistance = distance;
+
+    // ピンチズーム判定
+    if (state.touchTwoFingerMode !== "zoom" && Math.abs(distance - prevDist) >= PINCH_DISTANCE_THRESHOLD) {
+        state.touchTwoFingerMode = "zoom";
+    }
+
+    if (state.touchTwoFingerMode === "zoom") {
+        applyPinchZoom(prev, centerPoint, prevDist, distance);
+        return;
+    }
+
+    // 制約なしパン
+    state.frameTranslateX += (centerPoint.x - prev.x);
+    state.frameTranslateY += (centerPoint.y - prev.y);
+    syncFrameTransform();
+}
+
+function finishDirectTwoFingerPan() {
+    state.touchTwoFingerScroll = false;
+    state.touchTwoFingerMode = null;
+    state.touchLastCenterPoint = null;
+    state.touchLastDistance = null;
     elements.viewerStatus.textContent = `Zoom ${Math.round(state.frameScale * 100)}%.`;
     scheduleNextFrame(getFrameIntervalMs());
 }
@@ -2473,7 +2794,7 @@ async function flushPointerMoveQueue() {
 }
 
 function updateFrameCursor(ratio, options = {}) {
-    if (!ratio || !state.selectedWindow || elements.windowFrame.hidden) {
+    if (!ratio || !state.selectedWindow || elements.windowFrame.hidden || state.touchMode === "direct") {
         elements.frameCursor.hidden = true;
         return;
     }
@@ -2499,7 +2820,7 @@ function handleFrameMetadataLoaded() {
 }
 
 function syncFrameCursor() {
-    if (!state.cursorRatio || !state.selectedWindow || elements.windowFrame.hidden) {
+    if (!state.cursorRatio || !state.selectedWindow || elements.windowFrame.hidden || state.touchMode === "direct") {
         elements.frameCursor.hidden = true;
         return;
     }

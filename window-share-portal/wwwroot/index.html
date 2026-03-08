@@ -25,13 +25,13 @@
                     <button id="mode-window-button" class="mode-toggle-button active" type="button">Win</button>
                     <button id="mode-monitor-button" class="mode-toggle-button" type="button">Mon</button>
                 </div>
-                <button id="window-prev-button" class="header-nav-button" type="button" aria-label="Previous">&#8249;</button>
-                <p id="viewer-window-title" class="viewer-window-title">No window selected</p>
-                <button id="window-next-button" class="header-nav-button" type="button" aria-label="Next">&#8250;</button>
+                <button id="resize-toggle-button" class="header-toggle-button" type="button" disabled>Resize</button>
                 <div class="mode-toggle">
                     <button id="touch-mode-pointer" class="mode-toggle-button active" type="button">Ptr</button>
                     <button id="touch-mode-direct" class="mode-toggle-button" type="button">Touch</button>
                 </div>
+                <button id="window-prev-button" class="header-nav-button" type="button" aria-label="Previous">&#8249;</button>
+                <button id="window-next-button" class="header-nav-button" type="button" aria-label="Next">&#8250;</button>
             </div>
 
             <div class="frame-stage">
@@ -47,6 +47,10 @@
             </div>
 
             <p id="viewer-status" class="viewer-status">No connection.</p>
+
+            <div class="title-bar">
+                <p id="viewer-window-title" class="title-bar-text">No window selected</p>
+            </div>
 
             <form id="text-form" class="text-dock">
                 <div class="text-dock-row text-dock-row-main">

@@ -146,8 +146,8 @@ button:disabled {
     flex: 0 0 auto;
     display: grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     border-radius: 8px;
     background: rgba(0, 0, 0, 0.6);
     border: 1px solid var(--border);
@@ -173,13 +173,14 @@ button:disabled {
 }
 
 .mode-toggle-button {
-    padding: 4px 8px;
+    padding: 0 8px;
+    height: 28px;
     border: none;
     background: transparent;
     color: var(--text-dim);
     font-size: 0.65rem;
     font-weight: 600;
-    line-height: 1;
+    line-height: 28px;
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
@@ -194,42 +195,71 @@ button:disabled {
     opacity: 0.2;
 }
 
-.viewer-window-title {
+#window-prev-button {
+    margin-left: auto;
+}
+
+.header-toggle-button {
     pointer-events: auto;
-    flex: 1 1 0;
-    min-width: 0;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 8px;
+    flex: 0 0 auto;
+    height: 28px;
+    padding: 0 10px;
     border-radius: 8px;
     background: rgba(0, 0, 0, 0.6);
     border: 1px solid var(--border);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    font-size: 0.72rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.header-toggle-button.active {
+    background: var(--accent);
+    color: var(--accent-text);
+}
+
+.header-toggle-button:disabled {
+    opacity: 0.2;
+}
+
+/* --- Title bar (above text dock) --- */
+
+.title-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100px;
+    z-index: 4;
+    padding: 0 max(6px, env(safe-area-inset-right)) 2px max(6px, env(safe-area-inset-left));
+    pointer-events: auto;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.title-bar-text {
+    text-align: center;
+    font-size: 0.7rem;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: rgba(255, 255, 255, 0.8);
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-}
-
-.viewer-window-title:active {
-    background: rgba(47, 170, 132, 0.3);
+    color: rgba(255, 255, 255, 0.6);
 }
 
 /* --- Frame --- */
 
 .frame-stage {
     position: absolute;
-    top: 44px;
+    top: 18px;
     left: 0;
     right: 0;
-    bottom: 80px;
+    bottom: 104px;
     display: grid;
     place-items: center;
     overflow: hidden;
