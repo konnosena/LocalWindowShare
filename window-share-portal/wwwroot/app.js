@@ -20,6 +20,7 @@ const RESIZE_SCALE_STORAGE_KEY = "windowSharePortal.resizeScale";
 const LAST_WINDOW_STORAGE_KEY = "windowSharePortal.lastWindow";
 const LOOP_SELECTION_STORAGE_KEY = "windowSharePortal.loopSelection";
 const TOUCH_MODE_STORAGE_KEY = "windowSharePortal.touchMode";
+const CUSTOM_KEYS_STORAGE_KEY = "windowSharePortal.customKeys";
 const DIRECT_TAP_HOLD_MS = 400;
 const DIRECT_SCROLL_GAIN = 2;
 const TITLE_FLICK_THRESHOLD = 40;
@@ -157,13 +158,24 @@ const elements = {
     selectNoneButton: document.getElementById("select-none-button"),
     resizeScaleSelect: document.getElementById("resize-scale-select"),
     resizeToggleButton: document.getElementById("resize-toggle-button"),
-    titleBar: document.querySelector(".title-bar"),
+    centerButton: document.getElementById("center-button"),
+    infoBar: document.getElementById("info-bar"),
+    customKeyList: document.getElementById("custom-key-list"),
+    customKeyInput: document.getElementById("custom-key-input"),
+    customKeyLabel: document.getElementById("custom-key-label"),
+    customKeyAdd: document.getElementById("custom-key-add"),
+    keyDropdown: document.getElementById("key-dropdown"),
+    modCtrl: document.getElementById("mod-ctrl"),
+    modShift: document.getElementById("mod-shift"),
+    modAlt: document.getElementById("mod-alt"),
+    modWin: document.getElementById("mod-win"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
     registerGlobalClientLogging();
     applyTouchModeUI();
     bindEvents();
+    loadCustomKeys();
     bootstrap().catch(showFatalError);
 });
 
@@ -213,6 +225,12 @@ function bindEvents() {
     elements.resizeToggleButton.addEventListener("click", () => {
         toggleMobileResize().catch(showTransientError);
     });
+    elements.centerButton.addEventListener("click", () => {
+        state.frameTranslateX = 0;
+        state.frameTranslateY = 0;
+        state.frameScale = 1;
+        syncFrameTransform();
+    });
     elements.textInput.addEventListener("compositionstart", () => { state.imeComposing = true; });
     elements.textInput.addEventListener("compositionend", () => { state.imeComposing = false; });
     elements.textForm.addEventListener("submit", (event) => {
@@ -237,16 +255,16 @@ function bindEvents() {
         let startX = 0;
         let startY = 0;
         let active = false;
-        elements.titleBar.addEventListener("touchstart", (e) => {
+        elements.infoBar.addEventListener("touchstart", (e) => {
             if (e.touches.length !== 1) return;
             active = true;
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
         }, { passive: true });
-        elements.titleBar.addEventListener("touchmove", (e) => {
+        elements.infoBar.addEventListener("touchmove", (e) => {
             if (active) e.preventDefault();
         }, { passive: false });
-        elements.titleBar.addEventListener("touchend", (e) => {
+        elements.infoBar.addEventListener("touchend", (e) => {
             if (!active) return;
             active = false;
             const touch = e.changedTouches[0];
@@ -256,7 +274,15 @@ function bindEvents() {
                 selectAdjacentWindow(dx < 0 ? 1 : -1).catch(showTransientError);
             }
         }, { passive: true });
-        elements.titleBar.addEventListener("touchcancel", () => { active = false; }, { passive: true });
+        elements.infoBar.addEventListener("touchcancel", () => { active = false; }, { passive: true });
+    }
+
+    elements.customKeyAdd.addEventListener("click", addCustomKey);
+    elements.customKeyInput.addEventListener("focus", () => showKeyDropdown(elements.customKeyInput.value));
+    elements.customKeyInput.addEventListener("input", () => showKeyDropdown(elements.customKeyInput.value));
+    elements.customKeyInput.addEventListener("blur", () => setTimeout(hideKeyDropdown, 150));
+    for (const btn of [elements.modCtrl, elements.modShift, elements.modAlt, elements.modWin]) {
+        btn.addEventListener("click", () => btn.classList.toggle("active"));
     }
 
     elements.windowFrame.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -1852,9 +1878,9 @@ function saveLoopSelection() {
 function loadTouchModePreference() {
     try {
         const v = window.localStorage.getItem(TOUCH_MODE_STORAGE_KEY);
-        return v === "direct" ? "direct" : "pointer";
+        return v === "pointer" ? "pointer" : "direct";
     } catch {
-        return "pointer";
+        return "direct";
     }
 }
 
@@ -2753,6 +2779,10 @@ function constrainFrameTransform() {
         return;
     }
 
+    if (state.touchMode === "direct") {
+        return;
+    }
+
     const stageRect = elements.frameStage.getBoundingClientRect();
     const effectiveScale = getEffectiveFrameScale();
     const maxOffsetX = Math.max(0, ((effectiveScale - 1) * stageRect.width) / 2);
@@ -3168,6 +3198,138 @@ function sendKey(key) {
             elements.viewerStatus.textContent = `${key} sent.`;
         }
     }).catch(() => {});
+}
+
+// --- Custom Keys ---
+
+function loadCustomKeys() {
+    try {
+        const raw = window.localStorage.getItem(CUSTOM_KEYS_STORAGE_KEY);
+        const keys = raw ? JSON.parse(raw) : [];
+        renderCustomKeys(keys);
+    } catch {
+        renderCustomKeys([]);
+    }
+}
+
+function saveCustomKeys(keys) {
+    try {
+        window.localStorage.setItem(CUSTOM_KEYS_STORAGE_KEY, JSON.stringify(keys));
+    } catch {}
+}
+
+function getCustomKeys() {
+    try {
+        const raw = window.localStorage.getItem(CUSTOM_KEYS_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch {
+        return [];
+    }
+}
+
+const KEY_OPTIONS = [
+    "A","B","C","D","E","F","G","H","I","J","K","L","M",
+    "N","O","P","Q","R","S","T","U","V","W","X","Y","Z",
+    "0","1","2","3","4","5","6","7","8","9",
+    "F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12",
+    "Enter","Space","Escape","Tab","Backspace","Delete","Insert",
+    "Home","End","PageUp","PageDown",
+    "Up","Down","Left","Right",
+    "PrintScreen","ScrollLock","Pause",
+    "NumLock","NumPad0","NumPad1","NumPad2","NumPad3","NumPad4",
+    "NumPad5","NumPad6","NumPad7","NumPad8","NumPad9",
+    "Multiply","Add","Subtract","Decimal","Divide",
+    ";","=",",","-",".","/","`","[","\\","]","'",
+];
+
+function showKeyDropdown(filter) {
+    const query = filter.toLowerCase();
+    const matches = query
+        ? KEY_OPTIONS.filter(k => k.toLowerCase().includes(query))
+        : KEY_OPTIONS;
+
+    const dropdown = elements.keyDropdown;
+    dropdown.innerHTML = "";
+
+    if (matches.length === 0) {
+        dropdown.hidden = true;
+        return;
+    }
+
+    for (const key of matches.slice(0, 30)) {
+        const item = document.createElement("div");
+        item.className = "key-dropdown-item";
+        item.textContent = key;
+        item.addEventListener("pointerdown", (e) => {
+            e.preventDefault();
+            elements.customKeyInput.value = key;
+            dropdown.hidden = true;
+        });
+        dropdown.appendChild(item);
+    }
+    dropdown.hidden = false;
+}
+
+function hideKeyDropdown() {
+    elements.keyDropdown.hidden = true;
+}
+
+function addCustomKey() {
+    const keyName = elements.customKeyInput.value.trim();
+    if (!keyName) return;
+
+    const modifiers = [];
+    if (elements.modCtrl.classList.contains("active")) modifiers.push("Ctrl");
+    if (elements.modShift.classList.contains("active")) modifiers.push("Shift");
+    if (elements.modAlt.classList.contains("active")) modifiers.push("Alt");
+    if (elements.modWin.classList.contains("active")) modifiers.push("Win");
+
+    const combo = [...modifiers, keyName].join("+");
+    const label = elements.customKeyLabel.value.trim() || combo;
+
+    const keys = getCustomKeys();
+    keys.push({ combo, label });
+    saveCustomKeys(keys);
+    renderCustomKeys(keys);
+
+    elements.customKeyInput.value = "";
+    elements.customKeyLabel.value = "";
+    elements.modCtrl.classList.remove("active");
+    elements.modShift.classList.remove("active");
+    elements.modAlt.classList.remove("active");
+    elements.modWin.classList.remove("active");
+}
+
+function removeCustomKey(index) {
+    const keys = getCustomKeys();
+    keys.splice(index, 1);
+    saveCustomKeys(keys);
+    renderCustomKeys(keys);
+}
+
+function renderCustomKeys(keys) {
+    const container = elements.customKeyList;
+    container.innerHTML = "";
+    keys.forEach((entry, index) => {
+        const chip = document.createElement("div");
+        chip.className = "custom-key-chip";
+
+        const label = document.createElement("span");
+        label.textContent = entry.label;
+        label.addEventListener("click", () => sendKey(entry.combo));
+        chip.appendChild(label);
+
+        const del = document.createElement("span");
+        del.className = "chip-delete";
+        del.textContent = "\u00d7";
+        del.addEventListener("click", (e) => {
+            e.stopPropagation();
+            removeCustomKey(index);
+        });
+        chip.appendChild(del);
+
+        container.appendChild(chip);
+    });
 }
 
 function handleGlobalKeyDown(event) {

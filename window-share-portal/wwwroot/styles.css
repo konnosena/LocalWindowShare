@@ -227,23 +227,23 @@ button:disabled {
     opacity: 0.2;
 }
 
-/* --- Title bar (above text dock) --- */
+/* --- Info bar (above text dock) --- */
 
-.title-bar {
+.info-bar {
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 100px;
-    z-index: 4;
-    padding: 0 max(6px, env(safe-area-inset-right)) 2px max(6px, env(safe-area-inset-left));
+    bottom: 84px;
+    z-index: 5;
+    padding: 2px max(6px, env(safe-area-inset-right)) 2px max(6px, env(safe-area-inset-left));
     pointer-events: auto;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
+    text-align: center;
 }
 
-.title-bar-text {
-    text-align: center;
+.info-bar-title {
     font-size: 0.7rem;
     font-weight: 600;
     white-space: nowrap;
@@ -252,14 +252,19 @@ button:disabled {
     color: rgba(255, 255, 255, 0.6);
 }
 
+.info-bar-status {
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.35);
+}
+
 /* --- Frame --- */
 
 .frame-stage {
     position: absolute;
-    top: 18px;
+    top: 28px;
     left: 0;
     right: 0;
-    bottom: 104px;
+    bottom: 114px;
     display: grid;
     place-items: center;
     overflow: hidden;
@@ -326,20 +331,6 @@ button:disabled {
     text-align: center;
 }
 
-/* --- Status --- */
-
-.viewer-status {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 84px;
-    z-index: 5;
-    padding: 2px 12px;
-    text-align: center;
-    font-size: 0.68rem;
-    color: rgba(255, 255, 255, 0.4);
-    pointer-events: none;
-}
 
 /* --- Bottom input bar --- */
 
@@ -397,7 +388,7 @@ button:disabled {
     border-radius: 8px;
     background: var(--accent);
     color: var(--accent-text);
-    font-size: 0.8rem;
+    font-size: 1.4rem;
     font-weight: 700;
 }
 
@@ -427,8 +418,136 @@ button:disabled {
     touch-action: manipulation;
 }
 
+.quick-key-button[data-key="Up"],
+.quick-key-button[data-key="Down"],
+.quick-key-button[data-key="Left"],
+.quick-key-button[data-key="Right"] {
+    font-size: 0.9rem;
+}
+
 .quick-key-button:active:not(:disabled) {
     background: var(--accent-dim);
+}
+
+/* --- Custom Keys --- */
+
+.custom-key-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.custom-key-list:empty {
+    display: none;
+}
+
+.custom-key-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--surface-hi);
+    border: 1px solid var(--border);
+    font-size: 0.7rem;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.custom-key-chip .chip-delete {
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    margin-left: 2px;
+}
+
+.custom-key-chip:active {
+    background: var(--accent-dim);
+}
+
+.custom-key-form {
+    display: grid;
+    gap: 6px;
+}
+
+.custom-key-modifiers {
+    display: flex;
+    gap: 4px;
+}
+
+.modifier-button {
+    flex: 1 1 0;
+    height: 30px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface-hi);
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.modifier-button.active {
+    background: var(--accent);
+    color: var(--accent-text);
+    border-color: var(--accent);
+}
+
+.custom-key-inputs {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px;
+}
+
+.key-combo-wrapper {
+    position: relative;
+    min-width: 0;
+}
+
+.key-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 180px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-top: 2px;
+    z-index: 20;
+    -webkit-overflow-scrolling: touch;
+}
+
+.key-dropdown-item {
+    padding: 6px 8px;
+    font-size: 0.75rem;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.key-dropdown-item:active,
+.key-dropdown-item.highlighted {
+    background: var(--accent-dim);
+}
+
+.custom-key-text {
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.75rem;
+    min-width: 0;
 }
 
 /* --- Scroll rail (right edge) --- */

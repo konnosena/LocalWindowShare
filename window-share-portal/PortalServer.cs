@@ -106,6 +106,22 @@ internal sealed class PortalServer : IAsyncDisposable
         await StopAsync();
     }
 
+    public async Task DisconnectClientAsync(string clientId, CancellationToken cancellationToken = default)
+    {
+        var target = _connectionTracker.TryCreateDisconnectTarget(clientId) ??
+            throw new InvalidOperationException("Selected client was not found.");
+
+        foreach (var sessionId in target.SessionIds)
+        {
+            _sessionStore.Remove(sessionId);
+        }
+
+        await target.DisconnectAsync(cancellationToken);
+        _logStore.AddInformation(
+            "server",
+            $"Disconnected client {target.EnvironmentLabel} ({target.RemoteAddress}). Sessions={target.SessionIds.Count}, realtime={target.RealtimeConnectionCount}.");
+    }
+
     private void ConfigurePipeline(WebApplication app, NetworkAccessPolicy accessPolicy)
     {
         app.Use(async (context, next) =>
@@ -421,6 +437,27 @@ internal sealed class PortalServer : IAsyncDisposable
             }
 
             using var socket = await context.WebSockets.AcceptWebSocketAsync();
+            using var realtimeRegistration = _connectionTracker.RegisterRealtimeConnection(context, async disconnectCancellationToken =>
+            {
+                if (socket.State == System.Net.WebSockets.WebSocketState.Open ||
+                    socket.State == System.Net.WebSockets.WebSocketState.CloseReceived)
+                {
+                    try
+                    {
+                        await socket.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "disconnected by app", disconnectCancellationToken);
+                        return;
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (socket.State != System.Net.WebSockets.WebSocketState.Closed &&
+                    socket.State != System.Net.WebSockets.WebSocketState.Aborted)
+                {
+                    socket.Abort();
+                }
+            });
             var logger = context.RequestServices.GetRequiredService<ILogger<WebRtcWindowStreamSession>>();
             _logStore.AddInformation("webrtc", $"Accepted signaling socket for HWND {handle.Value}, {frameRate} fps, maxWidth={maxWidth?.ToString() ?? "auto"}, mode={streamMode.ToQueryValue()}, codec={videoCodecPreference.ToQueryValue()}, backend={_webRtcStreamSessionFactory.BackendName}.");
             var sessionOptions = new WebRtcStreamSessionOptions(handle.Value, maxWidth, frameRate, streamMode, videoCodecPreference, socket);
