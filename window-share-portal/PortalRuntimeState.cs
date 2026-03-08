@@ -5,6 +5,8 @@ internal sealed class PortalRuntimeState
     private string _token;
     private string _tokenModeLabel;
     private int _port;
+    private PortalManualAccessRules _manualAccessRules;
+    private PortalDisabledAccessRules _disabledAccessRules;
     private NetworkAccessPolicy _accessPolicy;
     private PortalWindowPlacement? _windowPlacement;
 
@@ -14,7 +16,9 @@ internal sealed class PortalRuntimeState
         _token = settings.Token;
         _tokenModeLabel = settings.TokenModeLabel;
         _port = settings.Port;
-        _accessPolicy = new NetworkAccessPolicy(settings.Port);
+        _manualAccessRules = settings.ManualAccessRules ?? PortalManualAccessRules.Empty;
+        _disabledAccessRules = settings.DisabledAccessRules ?? PortalDisabledAccessRules.Empty;
+        _accessPolicy = new NetworkAccessPolicy(settings.Port, _manualAccessRules, _disabledAccessRules);
         _windowPlacement = settings.WindowPlacement;
         SettingsPath = settingsStore.SettingsPath;
     }
@@ -47,15 +51,47 @@ internal sealed class PortalRuntimeState
 
     public string ListenUrl => CurrentAccessPolicy.PrimaryDisplayUrl;
 
+    public IReadOnlyList<AccessListItem> ListenUrlEntries => CurrentAccessPolicy.DisplayUrlEntries.ToArray();
+
     public IReadOnlyList<string> ListenUrls => CurrentAccessPolicy.DisplayUrls.ToArray();
 
-    public IReadOnlyList<string> AllowedAddressLabels => CurrentAccessPolicy.BindAddresses
-        .Select(address => address.ToString())
-        .ToArray();
+    public IReadOnlyList<AccessListItem> AllowedAddressEntries => CurrentAccessPolicy.AllowedAddressEntries.ToArray();
+
+    public IReadOnlyList<string> AllowedAddressLabels => CurrentAccessPolicy.AllowedAddressLabels.ToArray();
+
+    public IReadOnlyList<AccessListItem> AllowedNetworkEntries => CurrentAccessPolicy.AllowedNetworkEntries.ToArray();
 
     public IReadOnlyList<string> AllowedNetworkLabels => CurrentAccessPolicy.AllowedNetworkLabels.ToArray();
 
     public string SettingsPath { get; }
+
+    public PortalManualAccessRules ManualAccessRules
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return new PortalManualAccessRules(
+                    _manualAccessRules.BindAddresses.ToArray(),
+                    _manualAccessRules.AllowedAddresses.ToArray(),
+                    _manualAccessRules.AllowedNetworks.ToArray());
+            }
+        }
+    }
+
+    public PortalDisabledAccessRules DisabledAccessRules
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return new PortalDisabledAccessRules(
+                    _disabledAccessRules.BindAddresses.ToArray(),
+                    _disabledAccessRules.AllowedAddresses.ToArray(),
+                    _disabledAccessRules.AllowedNetworks.ToArray());
+            }
+        }
+    }
 
     public PortalWindowPlacement? WindowPlacement
     {
@@ -78,7 +114,9 @@ internal sealed class PortalRuntimeState
 
         var currentPort = Port;
         var windowPlacement = WindowPlacement;
-        _settingsStore.Save(normalizedToken, currentPort, windowPlacement);
+        var manualAccessRules = ManualAccessRules;
+        var disabledAccessRules = DisabledAccessRules;
+        _settingsStore.Save(normalizedToken, currentPort, windowPlacement, manualAccessRules, disabledAccessRules);
         Volatile.Write(ref _token, normalizedToken);
         Volatile.Write(ref _tokenModeLabel, "GUI settings");
     }
@@ -91,9 +129,11 @@ internal sealed class PortalRuntimeState
         }
 
         var token = Token;
-        var nextAccessPolicy = new NetworkAccessPolicy(port);
+        var manualAccessRules = ManualAccessRules;
+        var disabledAccessRules = DisabledAccessRules;
+        var nextAccessPolicy = new NetworkAccessPolicy(port, manualAccessRules, disabledAccessRules);
         var windowPlacement = WindowPlacement;
-        _settingsStore.Save(token, port, windowPlacement);
+        _settingsStore.Save(token, port, windowPlacement, manualAccessRules, disabledAccessRules);
 
         lock (_sync)
         {
@@ -106,11 +146,108 @@ internal sealed class PortalRuntimeState
     {
         var token = Token;
         var port = Port;
-        _settingsStore.Save(token, port, windowPlacement);
+        var manualAccessRules = ManualAccessRules;
+        var disabledAccessRules = DisabledAccessRules;
+        _settingsStore.Save(token, port, windowPlacement, manualAccessRules, disabledAccessRules);
 
         lock (_sync)
         {
             _windowPlacement = windowPlacement;
         }
+    }
+
+    public void UpdateManualAccessRules(PortalManualAccessRules manualAccessRules)
+    {
+        var normalizedAccessRules = new PortalManualAccessRules(
+            manualAccessRules.BindAddresses
+                .Select(NetworkAccessPolicy.NormalizeBindAddressOrThrow)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            manualAccessRules.AllowedAddresses
+                .Select(NetworkAccessPolicy.NormalizeAllowedAddressOrThrow)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            manualAccessRules.AllowedNetworks
+                .Select(NetworkAccessPolicy.NormalizeAllowedNetworkOrThrow)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray());
+        var token = Token;
+        var port = Port;
+        var windowPlacement = WindowPlacement;
+        var disabledAccessRules = DisabledAccessRules;
+        var nextAccessPolicy = new NetworkAccessPolicy(port, normalizedAccessRules, disabledAccessRules);
+        _settingsStore.Save(token, port, windowPlacement, normalizedAccessRules, disabledAccessRules);
+
+        lock (_sync)
+        {
+            _manualAccessRules = normalizedAccessRules;
+            _accessPolicy = nextAccessPolicy;
+        }
+    }
+
+    public void UpdateDisabledAccessRules(PortalDisabledAccessRules disabledAccessRules)
+    {
+        var normalizedDisabledRules = new PortalDisabledAccessRules(
+            disabledAccessRules.BindAddresses
+                .Select(NetworkAccessPolicy.NormalizeBindAddressOrThrow)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            disabledAccessRules.AllowedAddresses
+                .Select(NetworkAccessPolicy.NormalizeAllowedAddressOrThrow)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            disabledAccessRules.AllowedNetworks
+                .Select(NetworkAccessPolicy.NormalizeAllowedNetworkOrThrow)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray());
+        var token = Token;
+        var port = Port;
+        var windowPlacement = WindowPlacement;
+        var manualAccessRules = ManualAccessRules;
+        var nextAccessPolicy = new NetworkAccessPolicy(port, manualAccessRules, normalizedDisabledRules);
+        _settingsStore.Save(token, port, windowPlacement, manualAccessRules, normalizedDisabledRules);
+
+        lock (_sync)
+        {
+            _disabledAccessRules = normalizedDisabledRules;
+            _accessPolicy = nextAccessPolicy;
+        }
+    }
+
+    public void SetBindAddressEnabled(string value, bool isEnabled)
+    {
+        var normalized = NetworkAccessPolicy.NormalizeBindAddressOrThrow(value);
+        var current = DisabledAccessRules;
+        UpdateDisabledAccessRules(new PortalDisabledAccessRules(
+            SetEnabledState(current.BindAddresses, normalized, isEnabled),
+            current.AllowedAddresses,
+            current.AllowedNetworks));
+    }
+
+    public void SetAllowedAddressEnabled(string value, bool isEnabled)
+    {
+        var normalized = NetworkAccessPolicy.NormalizeAllowedAddressOrThrow(value);
+        var current = DisabledAccessRules;
+        UpdateDisabledAccessRules(new PortalDisabledAccessRules(
+            current.BindAddresses,
+            SetEnabledState(current.AllowedAddresses, normalized, isEnabled),
+            current.AllowedNetworks));
+    }
+
+    public void SetAllowedNetworkEnabled(string value, bool isEnabled)
+    {
+        var normalized = NetworkAccessPolicy.NormalizeAllowedNetworkOrThrow(value);
+        var current = DisabledAccessRules;
+        UpdateDisabledAccessRules(new PortalDisabledAccessRules(
+            current.BindAddresses,
+            current.AllowedAddresses,
+            SetEnabledState(current.AllowedNetworks, normalized, isEnabled)));
+    }
+
+    private static string[] SetEnabledState(IEnumerable<string> currentDisabledValues, string rawValue, bool isEnabled)
+    {
+        return isEnabled
+            ? currentDisabledValues.Where(existing => !string.Equals(existing, rawValue, StringComparison.OrdinalIgnoreCase)).ToArray()
+            : currentDisabledValues.Append(rawValue).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 }

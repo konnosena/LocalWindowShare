@@ -27,11 +27,13 @@ internal sealed class PortalControlForm : Form
     private readonly TextBox _tokenTextBox;
     private readonly CheckBox _showTokenCheckBox;
     private readonly Label _passwordHintLabel;
-    private readonly ListBox _accessUrlsListBox;
-    private readonly ListBox _allowedIpsListBox;
-    private readonly ListBox _allowedNetworksListBox;
+    private readonly CheckedListBox _accessUrlsIpv4ListBox;
+    private readonly CheckedListBox _accessUrlsIpv6ListBox;
+    private readonly CheckedListBox _allowedIpsListBox;
+    private readonly CheckedListBox _allowedNetworksListBox;
     private readonly ListView _clientListView;
     private readonly Label _clientSummaryLabel;
+    private readonly Button _disconnectClientButton;
     private readonly ListView _logListView;
     private readonly Label _logSummaryLabel;
     private readonly Button _clearLogsButton;
@@ -40,6 +42,8 @@ internal sealed class PortalControlForm : Form
     private long _lastRenderedLogSequenceId;
     private bool _initialPlacementApplied;
     private bool _startupConnectAttempted;
+    private bool _actionControlsLocked;
+    private bool _updatingToggleLists;
 
     public PortalControlForm(
         PortalRuntimeState runtimeState,
@@ -228,16 +232,18 @@ internal sealed class PortalControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
         };
-        leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
-        leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 30));
-        leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 30));
+        leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
         _contentSplit.Panel1.Controls.Add(leftLayout);
 
-        _accessUrlsListBox = CreateListGroup(leftLayout, 0, 0, "アクセス URL");
-        _allowedIpsListBox = CreateListGroup(leftLayout, 1, 0, "現在許可している IP");
-        _allowedNetworksListBox = CreateListGroup(leftLayout, 2, 0, "許可ネットワーク");
+        _accessUrlsIpv4ListBox = CreateToggleListGroup(leftLayout, 0, 0, "アクセス URL (IPv4)");
+        _accessUrlsIpv6ListBox = CreateToggleListGroup(leftLayout, 1, 0, "アクセス URL (IPv6)");
+        _allowedIpsListBox = CreateToggleListGroup(leftLayout, 2, 0, "現在許可している IP");
+        _allowedNetworksListBox = CreateToggleListGroup(leftLayout, 3, 0, "許可ネットワーク");
 
         var rightLayout = new TableLayoutPanel
         {
@@ -261,8 +267,9 @@ internal sealed class PortalControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
         };
+        clientsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         clientsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         clientsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         clientsGroup.Controls.Add(clientsLayout);
@@ -270,12 +277,29 @@ internal sealed class PortalControlForm : Form
         _clientSummaryLabel = CreateInfoLabel();
         clientsLayout.Controls.Add(_clientSummaryLabel, 0, 0);
 
+        var clientActionsRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+        };
+        _disconnectClientButton = new Button
+        {
+            Text = "選択を切断",
+            AutoSize = true,
+            Enabled = false,
+        };
+        _disconnectClientButton.Click += async (_, _) => await DisconnectSelectedClientAsync();
+        clientActionsRow.Controls.Add(_disconnectClientButton);
+        clientsLayout.Controls.Add(clientActionsRow, 0, 1);
+
         _clientListView = new ListView
         {
             Dock = DockStyle.Fill,
             FullRowSelect = true,
             GridLines = true,
             HideSelection = false,
+            MultiSelect = false,
             View = View.Details,
         };
         _clientListView.Columns.Add("Remote IP", 170);
@@ -284,7 +308,7 @@ internal sealed class PortalControlForm : Form
         _clientListView.Columns.Add("Status", 110);
         _clientListView.Columns.Add("Last Seen", 170);
         _clientListView.Columns.Add("User-Agent", 320);
-        clientsLayout.Controls.Add(_clientListView, 0, 1);
+        clientsLayout.Controls.Add(_clientListView, 0, 2);
 
         var logsGroup = new GroupBox
         {
@@ -353,8 +377,15 @@ internal sealed class PortalControlForm : Form
         _logListView.ContextMenuStrip = logContextMenu;
         logsLayout.Controls.Add(_logListView, 0, 1);
 
+        _accessUrlsIpv4ListBox.ItemCheck += (_, e) => HandleAccessToggleRequest(_accessUrlsIpv4ListBox, AccessToggleKind.BindAddress, e);
+        _accessUrlsIpv6ListBox.ItemCheck += (_, e) => HandleAccessToggleRequest(_accessUrlsIpv6ListBox, AccessToggleKind.BindAddress, e);
+        _allowedIpsListBox.ItemCheck += (_, e) => HandleAccessToggleRequest(_allowedIpsListBox, AccessToggleKind.AllowedAddress, e);
+        _allowedNetworksListBox.ItemCheck += (_, e) => HandleAccessToggleRequest(_allowedNetworksListBox, AccessToggleKind.AllowedNetwork, e);
+        _clientListView.SelectedIndexChanged += (_, _) => RefreshActionButtonStates();
+
         PopulateStaticListsIfChanged();
         RefreshDynamicState();
+        RefreshActionButtonStates();
 
         _refreshTimer = new System.Windows.Forms.Timer
         {
@@ -392,22 +423,27 @@ internal sealed class PortalControlForm : Form
 
     private void PopulateStaticListsIfChanged()
     {
-        var listenUrls = _runtimeState.ListenUrls;
-        var allowedAddresses = _runtimeState.AllowedAddressLabels;
-        var allowedNetworks = _runtimeState.AllowedNetworkLabels;
-        var signature = string.Join("\u001f", listenUrls) + "\u001e" +
-            string.Join("\u001f", allowedAddresses) + "\u001e" +
-            string.Join("\u001f", allowedNetworks);
+        var listenUrls = _runtimeState.ListenUrlEntries;
+        var listenUrlsIpv4 = listenUrls.Where(entry => NetworkAccessPolicy.IsIpv4AddressValue(entry.RawValue)).ToArray();
+        var listenUrlsIpv6 = listenUrls.Where(entry => NetworkAccessPolicy.IsIpv6AddressValue(entry.RawValue)).ToArray();
+        var allowedAddresses = _runtimeState.AllowedAddressEntries;
+        var allowedNetworks = _runtimeState.AllowedNetworkEntries;
+        var signature = string.Join("\u001f", listenUrlsIpv4.Select(FormatEntrySignature)) + "\u001e" +
+            string.Join("\u001f", listenUrlsIpv6.Select(FormatEntrySignature)) + "\u001e" +
+            string.Join("\u001f", allowedAddresses.Select(FormatEntrySignature)) + "\u001e" +
+            string.Join("\u001f", allowedNetworks.Select(FormatEntrySignature));
 
         if (string.Equals(_lastStaticListsSignature, signature, StringComparison.Ordinal))
         {
             return;
         }
 
-        ReplaceListBoxItems(_accessUrlsListBox, listenUrls);
-        ReplaceListBoxItems(_allowedIpsListBox, allowedAddresses);
-        ReplaceListBoxItems(_allowedNetworksListBox, allowedNetworks);
+        ReplaceCheckedListItems(_accessUrlsIpv4ListBox, listenUrlsIpv4);
+        ReplaceCheckedListItems(_accessUrlsIpv6ListBox, listenUrlsIpv6);
+        ReplaceCheckedListItems(_allowedIpsListBox, allowedAddresses);
+        ReplaceCheckedListItems(_allowedNetworksListBox, allowedNetworks);
         _lastStaticListsSignature = signature;
+        RefreshActionButtonStates();
     }
 
     private void RefreshDynamicState()
@@ -436,17 +472,24 @@ internal sealed class PortalControlForm : Form
 
         if (!_lastRenderedSnapshots.SequenceEqual(snapshots))
         {
+            var selectedClientId = GetSelectedClientId();
             _clientListView.BeginUpdate();
             _clientListView.Items.Clear();
             foreach (var snapshot in snapshots)
             {
                 var item = new ListViewItem(snapshot.RemoteAddress);
+                item.Tag = snapshot;
                 item.SubItems.Add(snapshot.EnvironmentLabel);
                 item.SubItems.Add($"{snapshot.LastMethod} {snapshot.LastPath}");
                 item.SubItems.Add($"{(snapshot.IsActive ? "active" : "recent")} / {snapshot.LastStatusCode}");
                 item.SubItems.Add(snapshot.LastSeenUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"));
                 item.SubItems.Add(snapshot.UserAgent);
                 _clientListView.Items.Add(item);
+                if (!string.IsNullOrWhiteSpace(selectedClientId) &&
+                    string.Equals(snapshot.ClientId, selectedClientId, StringComparison.Ordinal))
+                {
+                    item.Selected = true;
+                }
             }
             _clientListView.EndUpdate();
             _lastRenderedSnapshots = snapshots.ToArray();
@@ -482,6 +525,7 @@ internal sealed class PortalControlForm : Form
 
         _logListView.EndUpdate();
         _lastRenderedLogSequenceId = lastSequenceId;
+        RefreshActionButtonStates();
     }
 
     private void ClearLogs()
@@ -490,6 +534,183 @@ internal sealed class PortalControlForm : Form
         _lastRenderedLogSequenceId = -1;
         _passwordHintLabel.Text = "詳細ログをクリアしました。";
         RefreshDynamicState();
+    }
+
+    private void SetActionControlsLocked(bool locked)
+    {
+        _actionControlsLocked = locked;
+        _accessUrlsIpv4ListBox.Enabled = !locked;
+        _accessUrlsIpv6ListBox.Enabled = !locked;
+        _allowedIpsListBox.Enabled = !locked;
+        _allowedNetworksListBox.Enabled = !locked;
+        if (locked)
+        {
+            _disconnectClientButton.Enabled = false;
+            return;
+        }
+
+        RefreshActionButtonStates();
+    }
+
+    private void RefreshActionButtonStates()
+    {
+        if (_actionControlsLocked)
+        {
+            return;
+        }
+
+        _disconnectClientButton.Enabled = _clientListView.SelectedItems.Count > 0;
+    }
+
+    private void HandleAccessToggleRequest(CheckedListBox listBox, AccessToggleKind kind, ItemCheckEventArgs e)
+    {
+        if (_updatingToggleLists || _actionControlsLocked || e.Index < 0 || e.Index >= listBox.Items.Count)
+        {
+            return;
+        }
+
+        if (listBox.Items[e.Index] is not AccessListItem item)
+        {
+            return;
+        }
+
+        var isEnabled = e.NewValue == CheckState.Checked;
+        BeginInvoke(new Action(async () => await ApplyAccessToggleAsync(kind, item, isEnabled)));
+    }
+
+    private async Task ApplyAccessToggleAsync(AccessToggleKind kind, AccessListItem item, bool isEnabled)
+    {
+        var previousRules = _runtimeState.DisabledAccessRules;
+        var wasRunning = _server.IsRunning;
+        _connectionToggleButton.Enabled = false;
+        _applyPortButton.Enabled = false;
+        SetActionControlsLocked(true);
+
+        try
+        {
+            _passwordHintLabel.Text = kind switch
+            {
+                AccessToggleKind.BindAddress => isEnabled ? "アクセス URL を ON にしています..." : "アクセス URL を OFF にしています...",
+                AccessToggleKind.AllowedAddress => isEnabled ? "許可 IP を ON にしています..." : "許可 IP を OFF にしています...",
+                _ => isEnabled ? "許可ネットワークを ON にしています..." : "許可ネットワークを OFF にしています...",
+            };
+            if (wasRunning)
+            {
+                await _server.StopAsync();
+            }
+
+            switch (kind)
+            {
+                case AccessToggleKind.BindAddress:
+                    _runtimeState.SetBindAddressEnabled(item.RawValue, isEnabled);
+                    break;
+                case AccessToggleKind.AllowedAddress:
+                    _runtimeState.SetAllowedAddressEnabled(item.RawValue, isEnabled);
+                    break;
+                case AccessToggleKind.AllowedNetwork:
+                    _runtimeState.SetAllowedNetworkEnabled(item.RawValue, isEnabled);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown toggle kind: {kind}");
+            }
+
+            if (wasRunning)
+            {
+                await _server.StartAsync();
+            }
+
+            _passwordHintLabel.Text = wasRunning
+                ? $"{GetToggleSuccessMessage(kind, isEnabled)} 接続を再起動して反映しました。"
+                : $"{GetToggleSuccessMessage(kind, isEnabled)} 接続を ON にすると反映されます。";
+        }
+        catch (Exception exception)
+        {
+            if (!AreDisabledAccessRulesEquivalent(_runtimeState.DisabledAccessRules, previousRules))
+            {
+                try
+                {
+                    _runtimeState.UpdateDisabledAccessRules(previousRules);
+                }
+                catch
+                {
+                }
+            }
+
+            if (wasRunning && !_server.IsRunning)
+            {
+                try
+                {
+                    await _server.StartAsync();
+                }
+                catch
+                {
+                }
+            }
+
+            _passwordHintLabel.Text = "アクセス設定の更新に失敗しました。";
+            MessageBox.Show(this, exception.Message, "Access rule update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _connectionToggleButton.Enabled = true;
+            _applyPortButton.Enabled = true;
+            SetActionControlsLocked(false);
+            RefreshDynamicState();
+        }
+    }
+
+    private static string GetToggleSuccessMessage(AccessToggleKind kind, bool isEnabled)
+    {
+        return kind switch
+        {
+            AccessToggleKind.BindAddress => isEnabled ? "アクセス URL を ON にしました。" : "アクセス URL を OFF にしました。",
+            AccessToggleKind.AllowedAddress => isEnabled ? "許可 IP を ON にしました。" : "許可 IP を OFF にしました。",
+            _ => isEnabled ? "許可ネットワークを ON にしました。" : "許可ネットワークを OFF にしました。",
+        };
+    }
+
+    private async Task DisconnectSelectedClientAsync()
+    {
+        var snapshot = GetSelectedClientSnapshot();
+        if (snapshot is null)
+        {
+            _passwordHintLabel.Text = "切断する環境を選択してください。";
+            return;
+        }
+
+        var confirmResult = MessageBox.Show(
+            this,
+            $"{snapshot.EnvironmentLabel} ({snapshot.RemoteAddress}) を切断しますか？\r\n次回アクセス時は再ログインが必要になります。",
+            "Disconnect client",
+            MessageBoxButtons.OKCancel,
+            MessageBoxIcon.Warning);
+        if (confirmResult != DialogResult.OK)
+        {
+            return;
+        }
+
+        _connectionToggleButton.Enabled = false;
+        _applyPortButton.Enabled = false;
+        SetActionControlsLocked(true);
+
+        try
+        {
+            _passwordHintLabel.Text = "選択した環境を切断しています...";
+            await _server.DisconnectClientAsync(snapshot.ClientId);
+            _passwordHintLabel.Text = $"{snapshot.EnvironmentLabel} ({snapshot.RemoteAddress}) を切断しました。";
+        }
+        catch (Exception exception)
+        {
+            _passwordHintLabel.Text = "接続の切断に失敗しました。";
+            MessageBox.Show(this, exception.Message, "Disconnect client failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _connectionToggleButton.Enabled = true;
+            _applyPortButton.Enabled = true;
+            SetActionControlsLocked(false);
+            RefreshDynamicState();
+        }
     }
 
     private void HandleLogListKeyDown(object? sender, KeyEventArgs e)
@@ -565,6 +786,7 @@ internal sealed class PortalControlForm : Form
 
         _connectionToggleButton.Enabled = false;
         _applyPortButton.Enabled = false;
+        SetActionControlsLocked(true);
 
         try
         {
@@ -581,6 +803,7 @@ internal sealed class PortalControlForm : Form
         {
             _connectionToggleButton.Enabled = true;
             _applyPortButton.Enabled = true;
+            SetActionControlsLocked(false);
             RefreshDynamicState();
         }
     }
@@ -589,6 +812,7 @@ internal sealed class PortalControlForm : Form
     {
         _connectionToggleButton.Enabled = false;
         _applyPortButton.Enabled = false;
+        SetActionControlsLocked(true);
 
         try
         {
@@ -613,6 +837,7 @@ internal sealed class PortalControlForm : Form
         {
             _connectionToggleButton.Enabled = true;
             _applyPortButton.Enabled = true;
+            SetActionControlsLocked(false);
             RefreshDynamicState();
         }
     }
@@ -635,6 +860,7 @@ internal sealed class PortalControlForm : Form
         var wasRunning = _server.IsRunning;
         _connectionToggleButton.Enabled = false;
         _applyPortButton.Enabled = false;
+        SetActionControlsLocked(true);
 
         try
         {
@@ -687,6 +913,7 @@ internal sealed class PortalControlForm : Form
         {
             _connectionToggleButton.Enabled = true;
             _applyPortButton.Enabled = true;
+            SetActionControlsLocked(false);
             RefreshDynamicState();
         }
     }
@@ -792,17 +1019,48 @@ internal sealed class PortalControlForm : Form
         };
     }
 
-    private static void ReplaceListBoxItems(ListBox listBox, IReadOnlyList<string> items)
+    private static string FormatEntrySignature(AccessListItem item)
     {
+        return $"{item.RawValue}|{item.DisplayText}|{item.IsEnabled}|{item.IsManual}";
+    }
+
+    private string? GetSelectedClientId()
+    {
+        return GetSelectedClientSnapshot()?.ClientId;
+    }
+
+    private ClientConnectionSnapshot? GetSelectedClientSnapshot()
+    {
+        return _clientListView.SelectedItems.Count == 0
+            ? null
+            : _clientListView.SelectedItems[0].Tag as ClientConnectionSnapshot;
+    }
+
+    private static bool AreDisabledAccessRulesEquivalent(PortalDisabledAccessRules left, PortalDisabledAccessRules right)
+    {
+        return left.BindAddresses.SequenceEqual(right.BindAddresses, StringComparer.OrdinalIgnoreCase) &&
+            left.AllowedAddresses.SequenceEqual(right.AllowedAddresses, StringComparer.OrdinalIgnoreCase) &&
+            left.AllowedNetworks.SequenceEqual(right.AllowedNetworks, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void ReplaceCheckedListItems(CheckedListBox listBox, IEnumerable<AccessListItem> items)
+    {
+        var nextItems = items.ToArray();
+        _updatingToggleLists = true;
         listBox.BeginUpdate();
         try
         {
             listBox.Items.Clear();
-            listBox.Items.AddRange(items.Cast<object>().ToArray());
+            foreach (var item in nextItems)
+            {
+                var index = listBox.Items.Add(item);
+                listBox.SetItemChecked(index, item.IsEnabled);
+            }
         }
         finally
         {
             listBox.EndUpdate();
+            _updatingToggleLists = false;
         }
     }
 
@@ -814,7 +1072,11 @@ internal sealed class PortalControlForm : Form
         }
     }
 
-    private static ListBox CreateListGroup(TableLayoutPanel parent, int row, int column, string title)
+    private static CheckedListBox CreateToggleListGroup(
+        TableLayoutPanel parent,
+        int row,
+        int column,
+        string title)
     {
         var group = new GroupBox
         {
@@ -824,14 +1086,43 @@ internal sealed class PortalControlForm : Form
         };
         parent.Controls.Add(group, column, row);
 
-        var listBox = new ListBox
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        group.Controls.Add(layout);
+
+        var listBox = new CheckedListBox
         {
             Dock = DockStyle.Fill,
             HorizontalScrollbar = true,
             IntegralHeight = false,
             Font = new Font("Cascadia Mono", 10F),
+            CheckOnClick = true,
+            BorderStyle = BorderStyle.FixedSingle,
         };
-        group.Controls.Add(listBox);
+        layout.Controls.Add(listBox, 0, 0);
+
+        var hintLabel = new Label
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0),
+            Text = "チェックあり = ON / チェックなし = OFF / 状態は自動保存",
+        };
+        layout.Controls.Add(hintLabel, 0, 1);
+
         return listBox;
+    }
+
+    private enum AccessToggleKind
+    {
+        BindAddress,
+        AllowedAddress,
+        AllowedNetwork,
     }
 }

@@ -26,6 +26,7 @@
                     <button id="mode-monitor-button" class="mode-toggle-button" type="button">Mon</button>
                 </div>
                 <button id="resize-toggle-button" class="header-toggle-button" type="button" disabled>Resize</button>
+                <button id="center-button" class="header-toggle-button" type="button">Center</button>
                 <div class="mode-toggle">
                     <button id="touch-mode-pointer" class="mode-toggle-button active" type="button">Ptr</button>
                     <button id="touch-mode-direct" class="mode-toggle-button" type="button">Touch</button>
@@ -46,10 +47,9 @@
                 </div>
             </div>
 
-            <p id="viewer-status" class="viewer-status">No connection.</p>
-
-            <div class="title-bar">
-                <p id="viewer-window-title" class="title-bar-text">No window selected</p>
+            <div id="info-bar" class="info-bar">
+                <p id="viewer-window-title" class="info-bar-title">No window selected</p>
+                <p id="viewer-status" class="info-bar-status">No connection.</p>
             </div>
 
             <form id="text-form" class="text-dock">
@@ -61,10 +61,10 @@
                     <button class="quick-key-button" data-key="Escape" type="button" disabled>Esc</button>
                     <button class="quick-key-button" data-key="Ctrl+C" type="button" disabled>C+C</button>
                     <button class="quick-key-button" data-key="Ctrl+V" type="button" disabled>C+V</button>
-                    <button class="quick-key-button" data-key="Up" type="button" disabled>&#8593;</button>
-                    <button class="quick-key-button" data-key="Down" type="button" disabled>&#8595;</button>
-                    <button class="quick-key-button" data-key="Left" type="button" disabled>&#8592;</button>
-                    <button class="quick-key-button" data-key="Right" type="button" disabled>&#8594;</button>
+                    <button class="quick-key-button" data-key="Up" type="button" disabled>&#9650;</button>
+                    <button class="quick-key-button" data-key="Down" type="button" disabled>&#9660;</button>
+                    <button class="quick-key-button" data-key="Left" type="button" disabled>&#9664;</button>
+                    <button class="quick-key-button" data-key="Right" type="button" disabled>&#9654;</button>
                     <button class="quick-key-button" data-key="Tab" type="button" disabled>Tab</button>
                     <button class="quick-key-button" data-key="Backspace" type="button" disabled>BS</button>
                 </div>
@@ -149,6 +149,30 @@
                     <div class="button-row">
                         <button id="launch-explorer" class="ghost-button" type="button">Explorer</button>
                         <button id="launch-cmd" class="ghost-button" type="button">CMD</button>
+                    </div>
+                </section>
+
+                <section class="drawer-section">
+                    <h3>Custom Keys</h3>
+                    <div id="custom-key-list" class="custom-key-list"></div>
+                    <div class="custom-key-form">
+                        <div class="custom-key-modifiers">
+                            <button id="mod-ctrl" class="modifier-button" type="button">Ctrl</button>
+                            <button id="mod-shift" class="modifier-button" type="button">Shift</button>
+                            <button id="mod-alt" class="modifier-button" type="button">Alt</button>
+                            <button id="mod-win" class="modifier-button" type="button">Win</button>
+                        </div>
+                        <div class="custom-key-inputs">
+                            <div class="key-combo-wrapper">
+                                <input id="custom-key-input" type="text" placeholder="Key..." class="custom-key-text" autocomplete="off">
+                                <div id="key-dropdown" class="key-dropdown" hidden></div>
+                            </div>
+                            <span></span>
+                        </div>
+                        <div class="custom-key-inputs">
+                            <input id="custom-key-label" type="text" placeholder="Label (任意)" class="custom-key-text">
+                            <button id="custom-key-add" class="ghost-button" type="button">Add</button>
+                        </div>
                     </div>
                 </section>
 
