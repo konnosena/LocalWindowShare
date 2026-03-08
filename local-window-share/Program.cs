@@ -10,7 +10,8 @@ internal static class Program
         var runtimeState = new PortalRuntimeState(settings, settingsStore);
         var approvalService = new ClientApprovalService(settingsStore, settings.ClientApprovalRequired, settings.ApprovedClients);
         var connectionTracker = new ClientConnectionTracker();
-        using var fileLogWriter = new PortalFileLogWriter(contentRoot);
+        var isSingleFilePublish = !File.Exists(Path.Combine(AppContext.BaseDirectory, "LocalWindowShare.dll"));
+        using var fileLogWriter = isSingleFilePublish ? null : new PortalFileLogWriter(contentRoot);
         var logStore = new PortalLogStore(fileLogWriter: fileLogWriter);
         var sessionStore = new PortalSessionStore();
         var backendSelection = WebRtcBackendSelection.Resolve();
@@ -109,8 +110,7 @@ internal static class Program
         while (current is not null)
         {
             var projectFilePath = Path.Combine(current.FullName, "LocalWindowShare.csproj");
-            var webRootPath = Path.Combine(current.FullName, "wwwroot");
-            if (File.Exists(projectFilePath) && Directory.Exists(webRootPath))
+            if (File.Exists(projectFilePath))
             {
                 return current.FullName;
             }

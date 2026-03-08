@@ -2,12 +2,14 @@
 **/bin/
 **/obj/
 
+# Publish / distribution output
+dist/
+*.zip
+
 # Local tooling caches
 .dotnet/
 .dotnet-home/
 **/.dotnet-cli/
-local-window-share/.dotnet/
-local-window-share/.dotnet-home/
 
 # Local verification and scratch data
 .verify/
@@ -25,9 +27,10 @@ local-window-share/logs/
 *.rsuser
 *.suo
 
-# Test and publish output
+# Test output
 **/TestResults/
 **/artifacts/
 
+# Claude Code
 .claude/
 CLAUDE.md

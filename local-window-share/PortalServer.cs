@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.Extensions.FileProviders;
 
 internal sealed class PortalServer : IAsyncDisposable
 {
@@ -50,7 +51,6 @@ internal sealed class PortalServer : IAsyncDisposable
         {
             Args = _args,
             ContentRootPath = _contentRoot,
-            WebRootPath = Path.Combine(_contentRoot, "wwwroot"),
         });
 
         builder.Logging.ClearProviders();
@@ -165,8 +165,10 @@ internal sealed class PortalServer : IAsyncDisposable
             await next();
         });
 
-        app.UseDefaultFiles();
-        app.UseStaticFiles();
+        var embeddedProvider = new ManifestEmbeddedFileProvider(
+            typeof(PortalServer).Assembly, "wwwroot");
+        app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = embeddedProvider });
+        app.UseStaticFiles(new StaticFileOptions { FileProvider = embeddedProvider });
         app.UseWebSockets();
 
         app.MapGet("/", () => Results.Redirect("/index.html"));
