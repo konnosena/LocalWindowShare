@@ -21,7 +21,9 @@
       "Bash(magick:*)",
       "Bash(python:*)",
       "Bash(pip install:*)",
-      "Bash(dotnet:*)"
+      "Bash(dotnet:*)",
+      "Bash(rm:*)",
+      "Bash(powershell.exe:*)"
     ]
   }
 }
