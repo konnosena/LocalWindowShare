@@ -13,6 +13,12 @@ internal sealed class WindowBroker
 
     private static readonly nint ShellWindow = NativeMethods.GetShellWindow();
 
+    public static bool IsScreenHandle(long handle) => handle < 0;
+
+    private static int GetScreenIndex(long handle) => (int)((-handle) - 1);
+
+    private static long MakeScreenHandle(int screenIndex) => -(screenIndex + 1L);
+
     public IReadOnlyList<WindowSummary> ListWindows()
     {
         var windows = new List<WindowSummary>();
@@ -27,21 +33,49 @@ internal sealed class WindowBroker
             return true;
         }, nint.Zero);
 
-        return windows
+        var sortedWindows = windows
             .OrderBy(window => window.IsMinimized)
             .ThenBy(window => window.ProcessName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(window => window.Title, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            .ToList();
+
+        var screens = Screen.AllScreens;
+        for (var i = 0; i < screens.Length; i++)
+        {
+            var screen = screens[i];
+            var label = screen.Primary ? $"Screen {i + 1} (Primary)" : $"Screen {i + 1}";
+            sortedWindows.Insert(0, new WindowSummary(
+                MakeScreenHandle(i),
+                label,
+                0,
+                "Screen",
+                "Monitor",
+                false,
+                false,
+                new WindowBounds(screen.Bounds.Left, screen.Bounds.Top, screen.Bounds.Width, screen.Bounds.Height)));
+        }
+
+        return sortedWindows.ToArray();
     }
 
     public bool TryGetWindow(long handle, out WindowSummary summary)
     {
+        if (IsScreenHandle(handle))
+        {
+            return TryBuildScreenSummary(handle, out summary);
+        }
+
         return TryBuildWindowSummary((nint)handle, out summary);
     }
 
     public bool TryCaptureWindow(long handle, int? maxWidth, int? quality, string? format, out WindowFrame frame, out string message, out int statusCode)
     {
         frame = default!;
+
+        if (IsScreenHandle(handle))
+        {
+            return TryCaptureScreen(handle, maxWidth, quality, format, out frame, out message, out statusCode);
+        }
 
         if (!TryResolveWindow(handle, out var windowHandle, out var summary, out message, out statusCode))
         {
@@ -88,6 +122,11 @@ internal sealed class WindowBroker
         bitmap = default!;
         summary = default!;
 
+        if (IsScreenHandle(handle))
+        {
+            return TryCaptureScreenBitmap(handle, maxWidth, out bitmap, out summary, out message, out statusCode, lowLatencyScaling);
+        }
+
         if (!TryResolveWindow(handle, out var windowHandle, out summary, out message, out statusCode))
         {
             return false;
@@ -127,6 +166,11 @@ internal sealed class WindowBroker
 
     public ResizeResult ResizeWindow(long handle, int width, int height)
     {
+        if (IsScreenHandle(handle))
+        {
+            return new ResizeResult(new OperationError(StatusCodes.Status400BadRequest, "Screen windows cannot be resized."), default, default);
+        }
+
         if (!TryResolveWindow(handle, out var windowHandle, out var summary, out var message, out var statusCode))
         {
             return new ResizeResult(new OperationError(statusCode, message), default, default);
@@ -162,6 +206,11 @@ internal sealed class WindowBroker
 
     public OperationError? ActivateWindow(long handle)
     {
+        if (IsScreenHandle(handle))
+        {
+            return null;
+        }
+
         if (!TryResolveWindow(handle, out var windowHandle, out _, out var message, out var statusCode))
         {
             return new OperationError(statusCode, message);
@@ -210,7 +259,7 @@ internal sealed class WindowBroker
 
         if (!TryGetWindow(handle, out var summary))
         {
-            return new OperationError(StatusCodes.Status404NotFound, "Window not found.");
+            return new OperationError(StatusCodes.Status404NotFound, IsScreenHandle(handle) ? "Screen not found." : "Window not found.");
         }
 
         if (action is not "move" && action is not "down" && action is not "up" && action is not "click" && action is not "wheel")
@@ -218,7 +267,7 @@ internal sealed class WindowBroker
             return new OperationError(StatusCodes.Status400BadRequest, $"Unsupported pointer action: {request.Action}");
         }
 
-        if (action is not "move")
+        if (action is not "move" and not "wheel")
         {
             var activationError = ActivateWindow(handle);
             if (activationError is not null)
@@ -292,10 +341,13 @@ internal sealed class WindowBroker
                 $"Text must be {PortalSecurityLimits.MaxTextInputChars} characters or shorter.");
         }
 
-        var activationError = ActivateWindow(handle);
-        if (activationError is not null)
+        if (!IsScreenHandle(handle))
         {
-            return activationError;
+            var activationError = ActivateWindow(handle);
+            if (activationError is not null)
+            {
+                return activationError;
+            }
         }
 
         // クリップボード経由で貼り付け（IMEに干渉されない）
@@ -326,10 +378,13 @@ internal sealed class WindowBroker
             return new OperationError(StatusCodes.Status400BadRequest, "Key must not be empty.");
         }
 
-        var activationError = ActivateWindow(handle);
-        if (activationError is not null)
+        if (!IsScreenHandle(handle))
         {
-            return activationError;
+            var activationError = ActivateWindow(handle);
+            if (activationError is not null)
+            {
+                return activationError;
+            }
         }
 
         if (!TryBuildKeyInputs(request.Key, out var inputs))
@@ -344,6 +399,115 @@ internal sealed class WindowBroker
         }
 
         return null;
+    }
+
+    private static bool TryBuildScreenSummary(long handle, out WindowSummary summary)
+    {
+        summary = default!;
+        var index = GetScreenIndex(handle);
+        var screens = Screen.AllScreens;
+        if (index < 0 || index >= screens.Length)
+        {
+            return false;
+        }
+
+        var screen = screens[index];
+        var label = screen.Primary ? $"Screen {index + 1} (Primary)" : $"Screen {index + 1}";
+        summary = new WindowSummary(
+            handle,
+            label,
+            0,
+            "Screen",
+            "Monitor",
+            false,
+            false,
+            new WindowBounds(screen.Bounds.Left, screen.Bounds.Top, screen.Bounds.Width, screen.Bounds.Height));
+        return true;
+    }
+
+    public nint GetMonitorHandleForScreen(long handle)
+    {
+        var index = GetScreenIndex(handle);
+        var screens = Screen.AllScreens;
+        if (index < 0 || index >= screens.Length)
+        {
+            return nint.Zero;
+        }
+
+        var screen = screens[index];
+        var centerX = screen.Bounds.Left + screen.Bounds.Width / 2;
+        var centerY = screen.Bounds.Top + screen.Bounds.Height / 2;
+        return NativeMethods.MonitorFromPoint(
+            new NativeMethods.POINT { X = centerX, Y = centerY },
+            NativeMethods.MONITOR_DEFAULTTONEAREST);
+    }
+
+    private bool TryCaptureScreen(long handle, int? maxWidth, int? quality, string? format, out WindowFrame frame, out string message, out int statusCode)
+    {
+        frame = default!;
+
+        if (!TryBuildScreenSummary(handle, out var summary))
+        {
+            message = "Screen not found.";
+            statusCode = StatusCodes.Status404NotFound;
+            return false;
+        }
+
+        try
+        {
+            using var capturedBitmap = CaptureScreenBitmap(summary);
+            using var scaledBitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth);
+            var imageBytes = EncodeFrameImage(scaledBitmap, format, quality, out var contentType);
+
+            frame = new WindowFrame(summary, scaledBitmap.Width, scaledBitmap.Height, imageBytes, contentType);
+            message = string.Empty;
+            statusCode = StatusCodes.Status200OK;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = $"Failed to capture the screen: {ex.Message}";
+            statusCode = StatusCodes.Status500InternalServerError;
+            return false;
+        }
+    }
+
+    private bool TryCaptureScreenBitmap(long handle, int? maxWidth, out Bitmap bitmap, out WindowSummary summary, out string message, out int statusCode, bool lowLatencyScaling = false)
+    {
+        bitmap = default!;
+        summary = default!;
+
+        if (!TryBuildScreenSummary(handle, out summary))
+        {
+            message = "Screen not found.";
+            statusCode = StatusCodes.Status404NotFound;
+            return false;
+        }
+
+        try
+        {
+            using var capturedBitmap = CaptureScreenBitmap(summary);
+            bitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth, lowLatencyScaling);
+            message = string.Empty;
+            statusCode = StatusCodes.Status200OK;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = $"Failed to capture the screen: {ex.Message}";
+            statusCode = StatusCodes.Status500InternalServerError;
+            return false;
+        }
+    }
+
+    private static Bitmap CaptureScreenBitmap(WindowSummary summary)
+    {
+        var bounds = summary.Bounds.ToRectangle();
+        var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.Clear(Color.Black);
+        graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
+        return bitmap;
     }
 
     private static bool TryResolveWindow(long handle, out nint windowHandle, out WindowSummary summary, out string message, out int statusCode)

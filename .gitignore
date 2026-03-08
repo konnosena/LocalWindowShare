@@ -10,6 +10,8 @@ window-share-portal/.dotnet/
 window-share-portal/.dotnet-home/
 
 # Local verification and scratch data
+.verify/
+.scratch-mrwebrtc-probe/
 window-share-portal/.verify/
 window-share-portal/.scratch-api/
 

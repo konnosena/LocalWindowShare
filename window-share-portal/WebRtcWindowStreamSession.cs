@@ -100,7 +100,7 @@ internal sealed class WebRtcWindowStreamSession : IWebRtcStreamSession
         var requestedCodec = _requestedVideoCodecPreference.ToQueryValue();
         var advertised = string.Join(", ", formats.Select(format => format.Codec.ToString()));
         _logger.LogInformation("Advertising video codecs {Codecs} for HWND {Handle}. Requested={Requested}.", advertised, _currentWindowHandle, requestedCodec);
-        if (_requestedVideoCodecPreference is WebRtcVideoCodecPreference.AV1 or WebRtcVideoCodecPreference.VP9)
+        if (_requestedVideoCodecPreference is WebRtcVideoCodecPreference.VP9)
         {
             _logger.LogWarning("{RequestedCodec} was requested for HWND {Handle}, but this build can only send VP8. Falling back to {Fallback}.", _requestedVideoCodecPreference, _currentWindowHandle, formats.First().Codec);
         }
@@ -583,11 +583,23 @@ internal sealed class WebRtcWindowStreamSession : IWebRtcStreamSession
 
         try
         {
+            if (WindowBroker.IsScreenHandle(windowHandle))
+            {
+                var monitorHandle = _broker.GetMonitorHandleForScreen(windowHandle);
+                if (monitorHandle == nint.Zero)
+                {
+                    _logger.LogDebug("Could not resolve monitor handle for screen {Handle}. Falling back to bitmap capture.", windowHandle);
+                    return null;
+                }
+
+                return WindowsGraphicsCaptureSource.CreateForMonitor(monitorHandle);
+            }
+
             return new WindowsGraphicsCaptureSource((nint)windowHandle);
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Windows Graphics Capture was unavailable for HWND {Handle}. Falling back to bitmap capture.", windowHandle);
+            _logger.LogDebug(ex, "Windows Graphics Capture was unavailable for {Handle}. Falling back to bitmap capture.", windowHandle);
             return null;
         }
     }

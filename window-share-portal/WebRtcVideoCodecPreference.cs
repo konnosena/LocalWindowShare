@@ -3,7 +3,6 @@ internal enum WebRtcVideoCodecPreference
     Auto,
     VP8,
     VP9,
-    AV1,
 }
 
 internal sealed record WebRtcVideoCodecOption(string Value, string Label, bool Available, string Hint);
@@ -16,7 +15,6 @@ internal static class WebRtcVideoCodecPreferenceParser
         {
             "vp8" => WebRtcVideoCodecPreference.VP8,
             "vp9" => WebRtcVideoCodecPreference.VP9,
-            "av1" => WebRtcVideoCodecPreference.AV1,
             _ => WebRtcVideoCodecPreference.Auto,
         };
     }
@@ -27,7 +25,6 @@ internal static class WebRtcVideoCodecPreferenceParser
         {
             WebRtcVideoCodecPreference.VP8 => "vp8",
             WebRtcVideoCodecPreference.VP9 => "vp9",
-            WebRtcVideoCodecPreference.AV1 => "av1",
             _ => "auto",
         };
     }
@@ -57,7 +54,6 @@ internal static class WebRtcVideoCodecPreferenceParser
             new("auto", "Auto", true, "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。"),
             new("vp8", "VP8", true, "互換性優先です。"),
             new("vp9", "VP9", true, "高効率です。profile-id=0 を優先して接続します。"),
-            new("av1", "AV1", true, "高圧縮です。profile=0 を優先して接続します。"),
         ];
     }
 }

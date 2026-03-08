@@ -9,7 +9,6 @@ internal sealed class SipsorceryWebRtcStreamSessionFactory : IWebRtcStreamSessio
         new("auto", "Auto", true, "利用可能な codec の中から最適なものを使います。"),
         new("vp8", "VP8", true, "互換性優先です。"),
         new("vp9", "VP9", false, "現在の送信ライブラリでは未対応です。"),
-        new("av1", "AV1", false, "現在のサーバービルドでは未対応です。"),
     ];
 
     public WebRtcVideoCodecPreference NormalizeRequestedVideoCodecPreference(WebRtcVideoCodecPreference requestedPreference)

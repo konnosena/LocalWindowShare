@@ -16,10 +16,9 @@ internal static class Program
         using var fileLogWriter = new PortalFileLogWriter(contentRoot);
         var logStore = new PortalLogStore(fileLogWriter: fileLogWriter);
         var sessionStore = new PortalSessionStore();
-        var av1SessionManager = new GStreamerAv1SessionManager(logStore);
         var backendSelection = WebRtcBackendSelection.Resolve();
         var webRtcStreamSessionFactory = backendSelection.Factory;
-        var server = new PortalServer(args, contentRoot, runtimeState, connectionTracker, logStore, sessionStore, webRtcStreamSessionFactory, av1SessionManager);
+        var server = new PortalServer(args, contentRoot, runtimeState, connectionTracker, logStore, sessionStore, webRtcStreamSessionFactory);
         if (backendSelection.UsedFallback)
         {
             logStore.AddWarning("startup", $"Unknown WINDOW_SHARE_PORTAL_WEBRTC_BACKEND value '{backendSelection.ConfiguredValue}'. Falling back to {backendSelection.EffectiveValue}.");
@@ -45,7 +44,6 @@ internal static class Program
         finally
         {
             server.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            av1SessionManager.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 

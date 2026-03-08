@@ -130,6 +130,11 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern int GetSystemMetrics(int index);
 
+    [DllImport("user32.dll")]
+    internal static extern nint MonitorFromPoint(POINT pt, uint dwFlags);
+
+    internal const uint MONITOR_DEFAULTTONEAREST = 2;
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetProcessDpiAwarenessContext(nint dpiContext);
 
