@@ -9,7 +9,11 @@
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="app.ico" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="SIPSorcery" Version="10.0.3" />
     <PackageReference Include="SIPSorceryMedia.Encoders" Version="10.0.4" />

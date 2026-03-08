@@ -135,10 +135,12 @@ internal sealed partial class MainWindow : Window
         var listenUrlsIpv4 = listenUrls.Where(e => NetworkAccessPolicy.IsIpv4AddressValue(e.RawValue)).ToArray();
         var listenUrlsIpv6 = listenUrls.Where(e => NetworkAccessPolicy.IsIpv6AddressValue(e.RawValue)).ToArray();
         var allowedNetworks = _runtimeState.AllowedNetworkEntries;
+        var manualNetworks = _runtimeState.ManualAccessRules.AllowedNetworks;
 
         var signature = string.Join("\u001f", listenUrlsIpv4.Select(FormatEntrySignature)) + "\u001e" +
             string.Join("\u001f", listenUrlsIpv6.Select(FormatEntrySignature)) + "\u001e" +
-            string.Join("\u001f", allowedNetworks.Select(FormatEntrySignature));
+            string.Join("\u001f", allowedNetworks.Select(FormatEntrySignature)) + "\u001e" +
+            string.Join("\u001f", manualNetworks);
 
         if (string.Equals(_lastStaticListsSignature, signature, StringComparison.Ordinal))
             return;
@@ -148,6 +150,7 @@ internal sealed partial class MainWindow : Window
         {
             Ipv4ListBox.ItemsSource = listenUrlsIpv4.Select(e => ToAccessItemVmWithCidr(e, allowedNetworks)).ToList();
             Ipv6ListBox.ItemsSource = listenUrlsIpv6.Select(e => ToAccessItemVmWithCidr(e, allowedNetworks)).ToList();
+            ManualNetworksList.ItemsSource = manualNetworks.Select(n => new ManualNetworkViewModel { Cidr = n }).ToList();
         }
         finally
         {
@@ -208,8 +211,6 @@ internal sealed partial class MainWindow : Window
     private void SetActionControlsLocked(bool locked)
     {
         _actionControlsLocked = locked;
-        Ipv4ListBox.IsEnabled = !locked;
-        Ipv6ListBox.IsEnabled = !locked;
         if (locked)
         {
             DisconnectButton.IsEnabled = false;
@@ -297,6 +298,82 @@ internal sealed partial class MainWindow : Window
         _logWindow = new LogWindow(_logStore) { Owner = this };
         _logWindow.Closed += (_, _) => _logWindow = null;
         _logWindow.Show();
+    }
+
+    private async void OnAddAllowedNetwork(object sender, RoutedEventArgs e)
+    {
+        var input = AllowedNetworkInput.Text.Trim();
+        if (string.IsNullOrWhiteSpace(input))
+            return;
+
+        var wasRunning = _server.IsRunning;
+        ServerToggleButton.IsEnabled = false;
+        ApplyPortButton.IsEnabled = false;
+        SetActionControlsLocked(true);
+        try
+        {
+            StatusBarText.Text = "\u8A31\u53EF\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u3092\u8FFD\u52A0\u3057\u3066\u3044\u307E\u3059...";
+            if (wasRunning) await _server.StopAsync();
+            _runtimeState.AddManualAllowedNetwork(input);
+            if (wasRunning) await _server.StartAsync();
+            AllowedNetworkInput.Text = "";
+            StatusBarText.Text = $"{input} \u3092\u8A31\u53EF\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u306B\u8FFD\u52A0\u3057\u307E\u3057\u305F\u3002";
+        }
+        catch (Exception ex)
+        {
+            if (wasRunning && !_server.IsRunning)
+            {
+                try { await _server.StartAsync(); } catch { }
+            }
+            StatusBarText.Text = "\u8A31\u53EF\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u306E\u8FFD\u52A0\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002";
+            System.Windows.MessageBox.Show(this, ex.Message, "\u8FFD\u52A0\u5931\u6557",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            ServerToggleButton.IsEnabled = true;
+            ApplyPortButton.IsEnabled = true;
+            SetActionControlsLocked(false);
+            _lastStaticListsSignature = null;
+            RefreshDynamicState();
+        }
+    }
+
+    private async void OnRemoveAllowedNetwork(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string cidr)
+            return;
+
+        var wasRunning = _server.IsRunning;
+        ServerToggleButton.IsEnabled = false;
+        ApplyPortButton.IsEnabled = false;
+        SetActionControlsLocked(true);
+        try
+        {
+            StatusBarText.Text = "\u8A31\u53EF\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u3092\u524A\u9664\u3057\u3066\u3044\u307E\u3059...";
+            if (wasRunning) await _server.StopAsync();
+            _runtimeState.RemoveManualAllowedNetwork(cidr);
+            if (wasRunning) await _server.StartAsync();
+            StatusBarText.Text = $"{cidr} \u3092\u8A31\u53EF\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u304B\u3089\u524A\u9664\u3057\u307E\u3057\u305F\u3002";
+        }
+        catch (Exception ex)
+        {
+            if (wasRunning && !_server.IsRunning)
+            {
+                try { await _server.StartAsync(); } catch { }
+            }
+            StatusBarText.Text = "\u8A31\u53EF\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u306E\u524A\u9664\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002";
+            System.Windows.MessageBox.Show(this, ex.Message, "\u524A\u9664\u5931\u6557",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            ServerToggleButton.IsEnabled = true;
+            ApplyPortButton.IsEnabled = true;
+            SetActionControlsLocked(false);
+            _lastStaticListsSignature = null;
+            RefreshDynamicState();
+        }
     }
 
     private void OnAllowAllToggleClick(object sender, RoutedEventArgs e)
@@ -712,6 +789,11 @@ internal sealed class ClientItemViewModel
     public string LastSeen { get; init; } = "";
     public string UserAgent { get; init; } = "";
     public bool IsActive { get; init; }
+}
+
+internal sealed class ManualNetworkViewModel
+{
+    public string Cidr { get; init; } = "";
 }
 
 internal sealed class PendingApprovalViewModel
