@@ -342,7 +342,7 @@ function bindEvents() {
 
     elements.selectAllButton.addEventListener("click", () => {
         for (const w of state.windows) {
-            if (w.handle >= 0) state.loopHandles.add(w.handle);
+            if (w.handle >= 0 && !w.isMinimized) state.loopHandles.add(w.handle);
         }
         applyLoopSelectionChange();
     });
@@ -350,7 +350,7 @@ function bindEvents() {
     elements.selectWtButton.addEventListener("click", () => {
         state.loopHandles.clear();
         for (const w of state.windows) {
-            if (w.handle >= 0 && /WindowsTerminal|wt\b/i.test(w.processName)) {
+            if (w.handle >= 0 && !w.isMinimized && /WindowsTerminal|wt\b/i.test(w.processName)) {
                 state.loopHandles.add(w.handle);
             }
         }
@@ -812,19 +812,20 @@ function buildMonitorCard(windowInfo) {
 }
 
 function buildWindowToggleCard(windowInfo) {
-    const button = document.createElement("button");
-    button.type = "button";
+    const card = document.createElement("div");
     const inLoop = state.loopHandles.has(windowInfo.handle);
-    button.className = "window-card" + (inLoop ? " loop-active" : "");
-    button.dataset.handle = String(windowInfo.handle);
-    button.addEventListener("click", () => {
-        toggleWindowLoop(windowInfo.handle);
-    });
+    card.className = "window-card" + (inLoop ? " loop-active" : "");
+    card.dataset.handle = String(windowInfo.handle);
 
     const pillClass = windowInfo.isMinimized ? "pill-warn" : "pill-live";
     const pillLabel = windowInfo.isMinimized ? "min" : "live";
 
-    button.innerHTML = `
+    const body = document.createElement("div");
+    body.className = "window-card-body";
+    body.addEventListener("click", () => {
+        toggleWindowLoop(windowInfo.handle);
+    });
+    body.innerHTML = `
         <div class="window-card-row">
             <strong class="window-card-title">${escapeHtml(windowInfo.title)}</strong>
             <span class="pill ${pillClass}">${pillLabel}</span>
@@ -833,7 +834,31 @@ function buildWindowToggleCard(windowInfo) {
         <p class="window-card-meta">${windowInfo.bounds.width} x ${windowInfo.bounds.height}</p>
     `;
 
-    return button;
+    const selectBtn = document.createElement("button");
+    selectBtn.type = "button";
+    selectBtn.className = "window-card-select";
+    selectBtn.textContent = "Select";
+    selectBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        (async () => {
+            switchViewMode("window");
+            if (!state.loopHandles.has(windowInfo.handle)) {
+                state.loopHandles.add(windowInfo.handle);
+                applyLoopSelectionChange();
+            }
+            if (windowInfo.isMinimized) {
+                await fetch(`/api/windows/${windowInfo.handle}/activate`, {
+                    method: "POST",
+                    credentials: "same-origin",
+                });
+            }
+            await selectWindow(windowInfo.handle, true);
+        })().catch(showTransientError);
+    });
+
+    card.appendChild(body);
+    card.appendChild(selectBtn);
+    return card;
 }
 
 function toggleWindowLoop(handle) {
@@ -1091,9 +1116,9 @@ function getNavigableWindows() {
 function renderHeaderNavigation() {
     const navWindows = getNavigableWindows();
     const inNav = navWindows.some((w) => w.handle === state.selectedHandle);
-    const canJump = !inNav && navWindows.length > 0 && state.selectedHandle != null;
-    elements.windowPrevButton.disabled = !(inNav && navWindows.length > 1) && !canJump;
-    elements.windowNextButton.disabled = !(inNav && navWindows.length > 1) && !canJump;
+    const canNav = (inNav && navWindows.length > 1) || (!inNav && navWindows.length > 0 && state.selectedHandle != null);
+    elements.windowPrevButton.disabled = !canNav;
+    elements.windowNextButton.disabled = !canNav;
 }
 
 async function selectAdjacentWindow(direction) {

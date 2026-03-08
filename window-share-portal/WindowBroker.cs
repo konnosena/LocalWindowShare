@@ -553,8 +553,10 @@ internal sealed class WindowBroker
             return false;
         }
 
+        var isMinimized = NativeMethods.IsIconic(windowHandle);
+
         var bounds = GetWindowBounds(windowHandle);
-        if (bounds.Width < 120 || bounds.Height < 90)
+        if (!isMinimized && (bounds.Width < 120 || bounds.Height < 90))
         {
             return false;
         }
@@ -568,7 +570,6 @@ internal sealed class WindowBroker
         var processId = 0;
         NativeMethods.GetWindowThreadProcessId(windowHandle, ref processId);
         var processName = ResolveProcessName(processId);
-        var isMinimized = NativeMethods.IsIconic(windowHandle);
         var isForeground = NativeMethods.GetForegroundWindow() == windowHandle;
 
         summary = new WindowSummary(

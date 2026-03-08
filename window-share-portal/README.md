@@ -1,4 +1,4 @@
-# Window Share Portal
+# Local Window Share
 
 スマートフォンから Windows のトップレベルウィンドウを 1 つずつ選んで表示し、前面化と入力送信を行うための Web ポータルです。
 

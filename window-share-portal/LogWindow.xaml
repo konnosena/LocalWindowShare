@@ -2,7 +2,7 @@
         x:ClassModifier="internal"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Window Share Portal - ログ"
+        Title="Local Window Share - ログ"
         Width="900" Height="550"
         MinWidth="600" MinHeight="300"
         FontFamily="Segoe UI"
