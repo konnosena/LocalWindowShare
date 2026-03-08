@@ -13,7 +13,11 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:sipsorcery-org.github.io)",
       "Bash(python3:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(taskkill:*)",
+      "Bash(start:*)",
+      "Bash(tasklist:*)"
     ]
   }
 }

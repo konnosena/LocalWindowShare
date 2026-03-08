@@ -107,6 +107,26 @@ button:disabled {
     color: var(--danger);
 }
 
+.login-status {
+    font-size: 0.82rem;
+    color: var(--fg-muted, #8b949e);
+    animation: login-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes login-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.login-box button[type="submit"]:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+.login-box input:disabled {
+    opacity: 0.6;
+}
+
 /* ===== Workspace ===== */
 
 .workspace-shell {

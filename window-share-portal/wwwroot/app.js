@@ -498,23 +498,75 @@ async function handleLogin(event) {
     elements.loginError.hidden = true;
 
     const token = new FormData(elements.loginForm).get("token");
-    const response = await fetch("/api/login", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ token }),
-    });
+    const submitButton = elements.loginForm.querySelector("button[type=submit]");
+    const tokenInput = elements.loginForm.querySelector("input[name=token]");
+
+    submitButton.disabled = true;
+    tokenInput.disabled = true;
+    showLoginStatus("サーバーに接続しています...");
+
+    let response;
+    try {
+        const controller = new AbortController();
+        const statusTimer = setTimeout(() => {
+            showLoginStatus("管理者の承認を待っています...");
+        }, 1500);
+
+        response = await fetch("/api/login", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+            signal: controller.signal,
+        });
+
+        clearTimeout(statusTimer);
+    } catch (err) {
+        hideLoginStatus();
+        submitButton.disabled = false;
+        tokenInput.disabled = false;
+        elements.loginError.hidden = false;
+        elements.loginError.textContent = "接続に失敗しました。";
+        return;
+    }
+
+    hideLoginStatus();
+    submitButton.disabled = false;
+    tokenInput.disabled = false;
 
     if (!response.ok) {
         elements.loginError.hidden = false;
+        try {
+            const body = await response.json();
+            if (body.reason === "approval_required") {
+                elements.loginError.textContent = "管理者に承認されませんでした。もう一度お試しください。";
+                return;
+            }
+        } catch {}
         elements.loginError.textContent = "Token が違います。";
         return;
     }
 
     elements.loginForm.reset();
     await bootstrap();
+}
+
+function showLoginStatus(message) {
+    let statusEl = document.getElementById("login-status");
+    if (!statusEl) {
+        statusEl = document.createElement("p");
+        statusEl.id = "login-status";
+        statusEl.className = "login-status";
+        const errorEl = document.getElementById("login-error");
+        errorEl.parentNode.insertBefore(statusEl, errorEl);
+    }
+    statusEl.textContent = message;
+    statusEl.hidden = false;
+}
+
+function hideLoginStatus() {
+    const statusEl = document.getElementById("login-status");
+    if (statusEl) statusEl.hidden = true;
 }
 
 async function handleLogout() {
@@ -2370,10 +2422,10 @@ function handleDirectTouchStart(event) {
 
     state.directTouchHoldTimer = window.setTimeout(() => {
         if (state.directTouchMode === null && state.directTouchId !== null) {
-            state.directTouchMode = "drag";
+            state.directTouchMode = "longpress";
             sendPointerAction("move", state.directTouchStartRatio).catch(showTransientError);
-            sendPointerAction("down", state.directTouchStartRatio).catch(showTransientError);
-            elements.viewerStatus.textContent = "Drag started.";
+            sendPointerAction("click", state.directTouchStartRatio, { button: "right" }).catch(showTransientError);
+            elements.viewerStatus.textContent = "Right click sent.";
         }
     }, DIRECT_TAP_HOLD_MS);
 }
@@ -2450,6 +2502,8 @@ function handleDirectTouchEnd(event) {
         const finalRatio = getFrameRatiosFromClient(ended.clientX, ended.clientY) || ratio;
         sendPointerAction("up", finalRatio).catch(showTransientError);
         elements.viewerStatus.textContent = "Drag finished.";
+    } else if (mode === "longpress") {
+        // 長押し右クリックは既に送信済み → 何もしない
     } else if (mode === "scroll") {
         elements.viewerStatus.textContent = "Scroll finished.";
     } else if (mode === null && ratio) {
@@ -2481,11 +2535,13 @@ function handleDirectTap(ratio) {
     if (prevRatio && elapsed < DOUBLE_TAP_DELAY_MS) {
         const threshold = getDoubleTapDistanceThresholdRatio();
         if (distanceBetween(prevRatio, ratio) <= threshold) {
-            // ダブルタップ → 右クリック
+            // ダブルタップ → ダブルクリック
             state.directTouchTapTime = 0;
             state.directTouchTapRatio = null;
-            sendPointerAction("click", ratio, { button: "right" }).catch(showTransientError);
-            elements.viewerStatus.textContent = "Right click sent.";
+            sendPointerAction("move", ratio).catch(showTransientError);
+            sendPointerAction("click", ratio, { button: "left" }).catch(showTransientError);
+            sendPointerAction("click", ratio, { button: "left" }).catch(showTransientError);
+            elements.viewerStatus.textContent = "Double click sent.";
             return;
         }
     }
@@ -2968,8 +3024,10 @@ function clearPendingTouch() {
 function handleLeftTap(ratio) {
     const tapIntent = resolveTapIntent(ratio);
     if (tapIntent === "double") {
-        sendPointerAction("click", ratio, { button: "right" }).catch(showTransientError);
-        elements.viewerStatus.textContent = "Right click sent.";
+        // ダブルタップ → ダブルクリック
+        sendPointerAction("click", ratio, { button: "left" }).catch(showTransientError);
+        sendPointerAction("click", ratio, { button: "left" }).catch(showTransientError);
+        elements.viewerStatus.textContent = "Double click sent.";
         return;
     }
 
