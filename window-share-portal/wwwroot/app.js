@@ -13,17 +13,19 @@ const FRAME_RATE_STORAGE_KEY = "windowSharePortal.frameRate";
 const STREAM_MODE_OPTIONS = ["low-latency", "balanced", "high-quality"];
 const DEFAULT_STREAM_MODE = "balanced";
 const STREAM_MODE_STORAGE_KEY = "windowSharePortal.streamMode";
-const VIDEO_CODEC_OPTIONS = ["auto", "vp8", "vp9", "av1"];
+const VIDEO_CODEC_OPTIONS = ["auto", "vp8", "vp9"];
 const DEFAULT_VIDEO_CODEC = "auto";
 const VIDEO_CODEC_STORAGE_KEY = "windowSharePortal.videoCodec";
-const FILTER_WT_STORAGE_KEY = "windowSharePortal.filterWindowsTerminal";
 const RESIZE_SCALE_STORAGE_KEY = "windowSharePortal.resizeScale";
 const LAST_WINDOW_STORAGE_KEY = "windowSharePortal.lastWindow";
+const LOOP_SELECTION_STORAGE_KEY = "windowSharePortal.loopSelection";
+const TOUCH_MODE_STORAGE_KEY = "windowSharePortal.touchMode";
+const DIRECT_TAP_HOLD_MS = 400;
+const DIRECT_SCROLL_GAIN = 2.5;
 const DEFAULT_VIDEO_CODEC_UI_OPTIONS = Object.freeze([
     { value: "auto", label: "Auto", available: true, hint: "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。" },
     { value: "vp8", label: "VP8", available: true, hint: "互換性優先です。" },
     { value: "vp9", label: "VP9", available: true, hint: "高効率です。profile-id=0 を優先して接続します。" },
-    { value: "av1", label: "AV1", available: true, hint: "高圧縮です。profile=0 を優先して接続します。" },
 ]);
 const FRAME_WIDTH_CAPS_BY_MODE = Object.freeze({
     "low-latency": { 15: 1280, 30: 960, 45: 900, 60: 800 },
@@ -90,13 +92,21 @@ const state = {
     drawerOpen: false,
     activeStreamHandle: null,
     activeStreamMaxWidth: null,
-    av1Session: null,
     streamTargetSyncTimer: null,
-    filterWindowsTerminal: loadFilterWtPreference(),
+    loopHandles: new Set(),
+    viewMode: "window",
     savedWindowBounds: null,
     resizeBusy: false,
     resizeScale: loadResizeScalePreference(),
     imeComposing: false,
+    touchMode: loadTouchModePreference(),
+    directTouchId: null,
+    directTouchStartPoint: null,
+    directTouchStartRatio: null,
+    directTouchMode: null,
+    directTouchHoldTimer: null,
+    directTouchTapTime: 0,
+    directTouchTapRatio: null,
 };
 
 const elements = {
@@ -112,6 +122,11 @@ const elements = {
     refreshButton: document.getElementById("refresh-button"),
     launchExplorer: document.getElementById("launch-explorer"),
     launchCmd: document.getElementById("launch-cmd"),
+    touchModePointerButton: document.getElementById("touch-mode-pointer"),
+    touchModeDirectButton: document.getElementById("touch-mode-direct"),
+    modeWindowButton: document.getElementById("mode-window-button"),
+    modeMonitorButton: document.getElementById("mode-monitor-button"),
+    monitorList: document.getElementById("monitor-list"),
     windowList: document.getElementById("window-list"),
     windowPrevButton: document.getElementById("window-prev-button"),
     windowNextButton: document.getElementById("window-next-button"),
@@ -134,14 +149,17 @@ const elements = {
     textInput: document.getElementById("text-input"),
     textSubmit: document.getElementById("text-submit"),
     quickKeyButtons: Array.from(document.querySelectorAll(".quick-key-button")),
+    scrollPadLeft: document.getElementById("scroll-pad-left"),
     scrollPad: document.getElementById("scroll-pad"),
-    filterWtCheckbox: document.getElementById("filter-wt-checkbox"),
+    selectAllButton: document.getElementById("select-all-button"),
+    selectWtButton: document.getElementById("select-wt-button"),
+    selectNoneButton: document.getElementById("select-none-button"),
     resizeScaleSelect: document.getElementById("resize-scale-select"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-    elements.filterWtCheckbox.checked = state.filterWindowsTerminal;
     registerGlobalClientLogging();
+    applyTouchModeUI();
     bindEvents();
     bootstrap().catch(showFatalError);
 });
@@ -162,6 +180,11 @@ function bindEvents() {
     elements.drawerBackdrop.addEventListener("click", () => closeDrawer());
     elements.drawerCloseButton.addEventListener("click", () => closeDrawer());
     document.addEventListener("keydown", handleGlobalKeyDown);
+
+    elements.touchModePointerButton.addEventListener("click", () => setTouchMode("pointer"));
+    elements.touchModeDirectButton.addEventListener("click", () => setTouchMode("direct"));
+    elements.modeWindowButton.addEventListener("click", () => switchViewMode("window"));
+    elements.modeMonitorButton.addEventListener("click", () => switchViewMode("monitor"));
 
     elements.refreshButton.addEventListener("click", () => {
         refreshWindows(true).catch(showTransientError);
@@ -237,29 +260,65 @@ function bindEvents() {
     });
 
     for (const button of elements.quickKeyButtons) {
+        const key = button.dataset.key;
         button.addEventListener("click", () => {
-            sendKey(button.dataset.key);
+            sendKey(key);
         });
+
+        if (key === "Backspace") {
+            let repeatTimer = null;
+            const stopRepeat = () => {
+                if (repeatTimer !== null) {
+                    clearInterval(repeatTimer);
+                    repeatTimer = null;
+                }
+            };
+            button.addEventListener("pointerdown", (e) => {
+                if (e.button !== 0) return;
+                stopRepeat();
+                repeatTimer = setInterval(() => sendKey(key), 120);
+            });
+            button.addEventListener("pointerup", stopRepeat);
+            button.addEventListener("pointercancel", stopRepeat);
+            button.addEventListener("pointerleave", stopRepeat);
+        }
     }
 
-    elements.filterWtCheckbox.addEventListener("change", () => {
-        state.filterWindowsTerminal = elements.filterWtCheckbox.checked;
-        saveFilterWtPreference(state.filterWindowsTerminal);
-        const navWindows = getNavigableWindows();
-        if (navWindows.length > 0) {
-            selectWindow(navWindows[0].handle, false).catch(showTransientError);
-        } else if (state.windows.length > 0) {
-            selectWindow(state.windows[0].handle, false).catch(showTransientError);
+    elements.selectAllButton.addEventListener("click", () => {
+        for (const w of state.windows) {
+            if (w.handle >= 0) state.loopHandles.add(w.handle);
         }
-        renderHeaderNavigation();
+        applyLoopSelectionChange();
+    });
+
+    elements.selectWtButton.addEventListener("click", () => {
+        state.loopHandles.clear();
+        for (const w of state.windows) {
+            if (w.handle >= 0 && /WindowsTerminal|wt\b/i.test(w.processName)) {
+                state.loopHandles.add(w.handle);
+            }
+        }
+        applyLoopSelectionChange();
+    });
+
+    elements.selectNoneButton.addEventListener("click", () => {
+        state.loopHandles.clear();
+        applyLoopSelectionChange();
     });
 
     elements.scrollPad.addEventListener("pointerdown", (event) => {
-        handleScrollPadPointerDown(event);
+        handleScrollPadPointerDown(event, elements.scrollPad);
     });
     elements.scrollPad.addEventListener("pointermove", handleScrollPadPointerMove);
     elements.scrollPad.addEventListener("pointerup", handleScrollPadPointerUp);
     elements.scrollPad.addEventListener("pointercancel", handleScrollPadPointerCancel);
+
+    elements.scrollPadLeft.addEventListener("pointerdown", (event) => {
+        handleScrollPadPointerDown(event, elements.scrollPadLeft);
+    });
+    elements.scrollPadLeft.addEventListener("pointermove", handleScrollPadPointerMove);
+    elements.scrollPadLeft.addEventListener("pointerup", handleScrollPadPointerUp);
+    elements.scrollPadLeft.addEventListener("pointercancel", handleScrollPadPointerCancel);
 }
 
 async function bootstrap() {
@@ -412,7 +471,7 @@ async function handleLogout() {
 }
 
 async function toggleMobileResize() {
-    if (!state.selectedHandle || state.resizeBusy) {
+    if (!state.selectedHandle || state.resizeBusy || state.selectedHandle < 0) {
         return;
     }
     state.resizeBusy = true;
@@ -570,35 +629,161 @@ async function refreshWindows(preserveSelection) {
 
 function renderWindowList(windows) {
     state.windows = Array.isArray(windows) ? windows.slice() : [];
-    if (windows.length === 0) {
-        elements.windowList.innerHTML = '<p class="empty-copy">No shareable windows detected.</p>';
-        renderHeaderNavigation();
-        return;
+    const monitors = state.windows.filter((w) => w.handle < 0);
+    const windowsOnly = state.windows.filter((w) => w.handle >= 0);
+
+    // 初回は全選択、以降は保存された選択を復元
+    if (state.loopHandles.size === 0 && !state.loopInitialized) {
+        state.loopInitialized = true;
+        const saved = loadLoopSelection();
+        if (saved) {
+            for (const h of saved) {
+                if (windowsOnly.some((w) => w.handle === h)) state.loopHandles.add(h);
+            }
+        } else {
+            for (const w of windowsOnly) state.loopHandles.add(w.handle);
+        }
+    }
+
+    // ループに含まれていたが消えたハンドルを除去
+    const validHandles = new Set(windowsOnly.map((w) => w.handle));
+    for (const h of state.loopHandles) {
+        if (!validHandles.has(h)) state.loopHandles.delete(h);
+    }
+
+    // 新しいウィンドウはデフォルトでループに追加
+    for (const w of windowsOnly) {
+        if (!state.loopHandles.has(w.handle) && !state.loopInitialized) {
+            state.loopHandles.add(w.handle);
+        }
+    }
+
+    elements.monitorList.innerHTML = "";
+    if (monitors.length === 0) {
+        elements.monitorList.innerHTML = '<p class="empty-copy">No monitors detected.</p>';
+    } else {
+        for (const info of monitors) {
+            elements.monitorList.appendChild(buildMonitorCard(info));
+        }
     }
 
     elements.windowList.innerHTML = "";
-    for (const windowInfo of windows) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "window-card";
-        button.dataset.handle = String(windowInfo.handle);
-        button.addEventListener("click", () => {
-            selectWindow(windowInfo.handle, true).catch(showTransientError);
-        });
-
-        button.innerHTML = `
-            <div class="window-card-row">
-                <strong class="window-card-title">${escapeHtml(windowInfo.title)}</strong>
-                <span class="pill ${windowInfo.isMinimized ? "pill-warn" : "pill-live"}">${windowInfo.isMinimized ? "min" : "live"}</span>
-            </div>
-            <p class="window-card-meta">${escapeHtml(windowInfo.processName)} · PID ${windowInfo.processId}</p>
-            <p class="window-card-meta">${windowInfo.bounds.width} x ${windowInfo.bounds.height}</p>
-        `;
-
-        elements.windowList.appendChild(button);
+    if (windowsOnly.length === 0) {
+        elements.windowList.innerHTML = '<p class="empty-copy">No shareable windows detected.</p>';
+    } else {
+        for (const info of windowsOnly) {
+            elements.windowList.appendChild(buildWindowToggleCard(info));
+        }
     }
 
     highlightSelectedWindow();
+    renderHeaderNavigation();
+}
+
+function buildMonitorCard(windowInfo) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "window-card";
+    button.dataset.handle = String(windowInfo.handle);
+    button.addEventListener("click", () => {
+        switchViewMode("monitor");
+        selectWindow(windowInfo.handle, true).catch(showTransientError);
+    });
+
+    button.innerHTML = `
+        <div class="window-card-row">
+            <strong class="window-card-title">${escapeHtml(windowInfo.title)}</strong>
+            <span class="pill pill-screen">screen</span>
+        </div>
+        <p class="window-card-meta">${windowInfo.bounds.width} x ${windowInfo.bounds.height}</p>
+    `;
+
+    return button;
+}
+
+function buildWindowToggleCard(windowInfo) {
+    const button = document.createElement("button");
+    button.type = "button";
+    const inLoop = state.loopHandles.has(windowInfo.handle);
+    button.className = "window-card" + (inLoop ? " loop-active" : "");
+    button.dataset.handle = String(windowInfo.handle);
+    button.addEventListener("click", () => {
+        toggleWindowLoop(windowInfo.handle);
+    });
+
+    const pillClass = windowInfo.isMinimized ? "pill-warn" : "pill-live";
+    const pillLabel = windowInfo.isMinimized ? "min" : "live";
+
+    button.innerHTML = `
+        <div class="window-card-row">
+            <strong class="window-card-title">${escapeHtml(windowInfo.title)}</strong>
+            <span class="pill ${pillClass}">${pillLabel}</span>
+        </div>
+        <p class="window-card-meta">${escapeHtml(windowInfo.processName)} · PID ${windowInfo.processId}</p>
+        <p class="window-card-meta">${windowInfo.bounds.width} x ${windowInfo.bounds.height}</p>
+    `;
+
+    return button;
+}
+
+function toggleWindowLoop(handle) {
+    if (state.loopHandles.has(handle)) {
+        state.loopHandles.delete(handle);
+        // トグルOFFしたのが表示中なら次のループウィンドウへ移動
+        if (state.selectedHandle === handle) {
+            const loopWindows = getNavigableWindows();
+            if (loopWindows.length > 0) {
+                selectWindow(loopWindows[0].handle, false).catch(showTransientError);
+            } else {
+                resetSelection();
+            }
+        }
+    } else {
+        state.loopHandles.add(handle);
+        switchViewMode("window");
+        // 初めてのトグルON、または未選択なら表示切替
+        const loopWindows = getNavigableWindows();
+        if (loopWindows.length === 1 || state.selectedHandle == null) {
+            selectWindow(handle, false).catch(showTransientError);
+        }
+    }
+    saveLoopSelection();
+    refreshWindowToggleCards();
+    renderHeaderNavigation();
+}
+
+function refreshWindowToggleCards() {
+    for (const card of elements.windowList.querySelectorAll(".window-card")) {
+        const h = Number(card.dataset.handle);
+        card.classList.toggle("loop-active", state.loopHandles.has(h));
+    }
+}
+
+function switchViewMode(mode) {
+    if (state.viewMode === mode) return;
+    state.viewMode = mode;
+    elements.modeWindowButton.classList.toggle("active", mode === "window");
+    elements.modeMonitorButton.classList.toggle("active", mode === "monitor");
+
+    const navWindows = getNavigableWindows();
+    if (navWindows.length > 0) {
+        const current = navWindows.find((w) => w.handle === state.selectedHandle);
+        if (!current) {
+            selectWindow(navWindows[0].handle, false).catch(showTransientError);
+        }
+    }
+    renderHeaderNavigation();
+}
+
+function applyLoopSelectionChange() {
+    saveLoopSelection();
+    refreshWindowToggleCards();
+    const navWindows = getNavigableWindows();
+    if (navWindows.length > 0 && !navWindows.some((w) => w.handle === state.selectedHandle)) {
+        selectWindow(navWindows[0].handle, false).catch(showTransientError);
+    } else if (navWindows.length === 0 && state.selectedHandle != null && state.selectedHandle >= 0) {
+        resetSelection();
+    }
     renderHeaderNavigation();
 }
 
@@ -735,9 +920,7 @@ function videoCodecLabel(codec) {
         ? "VP8"
         : codec === "vp9"
             ? "VP9"
-            : codec === "av1"
-                ? "AV1"
-                : "Auto";
+            : "Auto";
 }
 
 async function handleStreamModeChange(mode) {
@@ -786,17 +969,18 @@ function highlightSelectedWindow() {
 }
 
 function getNavigableWindows() {
-    if (!state.filterWindowsTerminal) {
-        return state.windows;
+    if (state.viewMode === "monitor") {
+        return state.windows.filter((w) => w.handle < 0);
     }
-    return state.windows.filter((w) => /WindowsTerminal|wt\b/i.test(w.processName));
+    return state.windows.filter((w) => w.handle >= 0 && state.loopHandles.has(w.handle));
 }
 
 function renderHeaderNavigation() {
     const navWindows = getNavigableWindows();
-    const hasSelection = navWindows.some((w) => w.handle === state.selectedHandle);
-    elements.windowPrevButton.disabled = !hasSelection || navWindows.length <= 1;
-    elements.windowNextButton.disabled = !hasSelection || navWindows.length <= 1;
+    const inNav = navWindows.some((w) => w.handle === state.selectedHandle);
+    const canJump = !inNav && navWindows.length > 0 && state.selectedHandle != null;
+    elements.windowPrevButton.disabled = !(inNav && navWindows.length > 1) && !canJump;
+    elements.windowNextButton.disabled = !(inNav && navWindows.length > 1) && !canJump;
 }
 
 async function selectAdjacentWindow(direction) {
@@ -807,6 +991,7 @@ async function selectAdjacentWindow(direction) {
 
     const currentIndex = navWindows.findIndex((w) => w.handle === state.selectedHandle);
     if (currentIndex < 0) {
+        await selectWindow(navWindows[0].handle, false);
         return;
     }
 
@@ -854,7 +1039,6 @@ function canSwitchActiveWebRtcStreamWithoutReconnect() {
     return Boolean(
         state.selectedHandle
         && state.webrtcConnected
-        && !state.av1Session
         && state.peerConnection
         && state.peerConnection.connectionState === "connected"
         && state.signalingSocket
@@ -863,18 +1047,6 @@ function canSwitchActiveWebRtcStreamWithoutReconnect() {
 }
 
 function scheduleActiveStreamTargetSync() {
-    if (state.av1Session) {
-        if (state.streamTargetSyncTimer) {
-            window.clearTimeout(state.streamTargetSyncTimer);
-        }
-
-        state.streamTargetSyncTimer = window.setTimeout(() => {
-            state.streamTargetSyncTimer = null;
-            refreshFrameNow(false).catch(showTransientError);
-        }, 220);
-        return;
-    }
-
     if (!canSwitchActiveWebRtcStreamWithoutReconnect()) {
         return;
     }
@@ -942,28 +1114,7 @@ async function ensureWebRtcSession(forceReconnect) {
     const selectedCodec = ensureSupportedVideoCodecPreference(state.videoCodecPreference);
     const effectiveCodec = resolveEffectiveVideoCodecPreference(selectedCodec);
     const requestedWidth = getRequestedFrameWidth();
-    const usingAv1Backend = effectiveCodec === "av1";
-    const currentKey = usingAv1Backend
-        ? `av1:${state.selectedHandle}:${requestedWidth}:${state.frameRate}:${state.streamMode}:${effectiveCodec}`
-        : `${state.frameRate}:${state.streamMode}:${effectiveCodec}`;
-
-    if (usingAv1Backend) {
-        const isActive = state.webrtcConnected
-            && state.av1Session
-            && state.av1Session.streamKey === currentKey;
-
-        if (!forceReconnect && isActive) {
-            return;
-        }
-
-        const hadSession = Boolean(state.av1Session || state.peerConnection || state.signalingSocket);
-        await disconnectWebRtcSession({ clearVideo: forceReconnect });
-        if (hadSession) {
-            await wait(WEBRTC_RECONNECT_COOLDOWN_MS);
-        }
-        await connectAv1Session(requestedWidth, currentKey, selectedCodec, effectiveCodec);
-        return;
-    }
+    const currentKey = `${state.frameRate}:${state.streamMode}:${effectiveCodec}`;
 
     const isActive = state.webrtcConnected
         && state.peerConnection
@@ -983,242 +1134,6 @@ async function ensureWebRtcSession(forceReconnect) {
         await wait(WEBRTC_RECONNECT_COOLDOWN_MS);
     }
     await connectWebRtcSession(requestedWidth, currentKey, selectedCodec, effectiveCodec);
-}
-
-async function connectAv1Session(requestedWidth, streamKey, selectedCodec, effectiveCodec) {
-    if (!state.selectedHandle) {
-        return;
-    }
-
-    if (!window.GstWebRTCAPI) {
-        throw new Error("The GStreamer AV1 browser client is not loaded.");
-    }
-
-    logClientEvent("info", "Starting AV1 session.", {
-        handle: state.selectedHandle,
-        frameRate: state.frameRate,
-        maxWidth: requestedWidth,
-        streamMode: state.streamMode,
-        requestedCodec: selectedCodec,
-        effectiveCodec,
-    });
-
-    const response = await fetch("/api/av1/session", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            handle: state.selectedHandle,
-            maxWidth: requestedWidth,
-            frameRate: state.frameRate,
-            streamMode: state.streamMode,
-        }),
-    });
-
-    if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-    }
-
-    const sessionInfo = await response.json();
-    const generation = ++state.webrtcGeneration;
-    const av1Api = new window.GstWebRTCAPI({
-        meta: { client: "window-share-portal" },
-        signalingServerUrl: buildAv1SignalingUrl(sessionInfo.sessionId),
-        reconnectionTimeout: 0,
-        webrtcConfig: {
-            iceServers: [],
-        },
-    });
-    const av1Session = {
-        api: av1Api,
-        consumerSession: null,
-        connectionListener: null,
-        producersListener: null,
-        producerName: sessionInfo.producerName,
-        sessionId: sessionInfo.sessionId,
-        streamKey,
-    };
-
-    state.av1Session = av1Session;
-    state.webrtcConnected = false;
-    state.activeStreamHandle = state.selectedHandle;
-    state.activeStreamMaxWidth = requestedWidth;
-    elements.viewerStatus.textContent = `AV1 connecting... ${state.frameRate} fps · ${streamModeLabel(state.streamMode)}`;
-    elements.framePlaceholder.hidden = false;
-    elements.framePlaceholder.textContent = "AV1 backend connecting...";
-    elements.windowFrame.hidden = true;
-
-    const connected = new Promise((resolve, reject) => {
-        let settled = false;
-        let timeoutId = null;
-
-        const clearTimeoutOnce = () => {
-            if (timeoutId !== null) {
-                window.clearTimeout(timeoutId);
-                timeoutId = null;
-            }
-        };
-        const resolveOnce = () => {
-            if (!settled) {
-                settled = true;
-                clearTimeoutOnce();
-                resolve();
-            }
-        };
-        const rejectOnce = (error) => {
-            if (!settled) {
-                settled = true;
-                clearTimeoutOnce();
-                reject(error);
-            }
-        };
-        const attachStream = async (stream) => {
-            if (generation !== state.webrtcGeneration || !(stream instanceof MediaStream)) {
-                return;
-            }
-
-            if (elements.windowFrame.srcObject !== stream) {
-                elements.windowFrame.srcObject = stream;
-            }
-
-            elements.windowFrame.hidden = false;
-            elements.framePlaceholder.hidden = true;
-
-            try {
-                await elements.windowFrame.play();
-            } catch {
-            }
-
-            state.webrtcConnected = true;
-            elements.viewerStatus.textContent = `AV1 live · ${state.frameRate} fps · ${streamModeLabel(state.streamMode)} · ${describeCodecPreference(selectedCodec, effectiveCodec)}`;
-            updateFrameCursor(state.cursorRatio ?? { x: 0.5, y: 0.5 }, { style: cursorStyleForCurrentState(), pressed: isPressedCursor() });
-            syncFrameTransform();
-            resolveOnce();
-        };
-        const connectConsumer = (producer) => {
-            if (generation !== state.webrtcGeneration || av1Session.consumerSession || !producer) {
-                return;
-            }
-
-            const consumerSession = av1Api.createConsumerSession(producer.id);
-            if (!consumerSession) {
-                rejectOnce(new Error("Failed to create the AV1 consumer session."));
-                return;
-            }
-
-            av1Session.consumerSession = consumerSession;
-            consumerSession.addEventListener("error", (event) => {
-                logClientEvent("error", "AV1 consumer session failed.", {
-                    message: event.error?.message || event.message || "unknown AV1 consumer error",
-                });
-                rejectOnce(normalizeError(event.error || new Error(event.message || "AV1 consumer session failed."), "Failed to establish the AV1 stream."));
-            });
-            consumerSession.addEventListener("streamsChanged", () => {
-                logClientEvent("info", "AV1 consumer streams changed.", {
-                    streamCount: Array.isArray(consumerSession.streams) ? consumerSession.streams.length : 0,
-                });
-                const stream = Array.isArray(consumerSession.streams) ? consumerSession.streams[0] : null;
-                if (stream) {
-                    attachStream(stream).catch(() => {
-                    });
-                }
-            });
-            consumerSession.addEventListener("closed", () => {
-                logClientEvent("warning", "AV1 consumer session closed.", {
-                    producerName: av1Session.producerName,
-                });
-                if (generation === state.webrtcGeneration && !state.webrtcConnected) {
-                    rejectOnce(new Error("AV1 consumer session closed before the stream was ready."));
-                }
-            });
-
-            logClientEvent("info", "Connecting AV1 consumer session.", {
-                producerId: producer.id,
-                producerName: av1Session.producerName,
-            });
-            if (!consumerSession.connect()) {
-                rejectOnce(new Error("Failed to connect the AV1 consumer session."));
-            }
-        };
-
-        av1Session.connectionListener = {
-            connected(clientId) {
-                logClientEvent("info", "AV1 signaling connected.", {
-                    clientId,
-                    sessionId: av1Session.sessionId,
-                });
-                const producer = av1Api.getAvailableProducers()
-                    .find((current) => current?.meta?.name === av1Session.producerName);
-                if (producer) {
-                    connectConsumer(producer);
-                }
-            },
-            disconnected() {
-                logClientEvent("warning", "AV1 signaling disconnected.", {
-                    sessionId: av1Session.sessionId,
-                });
-                state.webrtcConnected = false;
-                if (generation === state.webrtcGeneration && !state.webrtcConnected) {
-                    rejectOnce(new Error("AV1 signaling disconnected before the stream was ready."));
-                }
-            },
-        };
-        av1Session.producersListener = {
-            producerAdded(producer) {
-                logClientEvent("info", "AV1 producer available.", {
-                    producerId: producer?.id ?? null,
-                    producerName: producer?.meta?.name ?? null,
-                });
-                if (producer?.meta?.name === av1Session.producerName) {
-                    connectConsumer(producer);
-                }
-            },
-            producerRemoved(producer) {
-                logClientEvent("info", "AV1 producer removed.", {
-                    producerId: producer?.id ?? null,
-                    producerName: producer?.meta?.name ?? null,
-                });
-            },
-        };
-
-        av1Api.registerConnectionListener(av1Session.connectionListener);
-        av1Api.registerProducersListener(av1Session.producersListener);
-
-        timeoutId = window.setTimeout(() => {
-            rejectOnce(new Error("Timed out waiting for the AV1 producer."));
-        }, 12000);
-    });
-
-    elements.windowFrame.addEventListener("loadedmetadata", async () => {
-        logClientEvent("info", "Remote video metadata loaded.", {
-            width: elements.windowFrame.videoWidth,
-            height: elements.windowFrame.videoHeight,
-        });
-        if (generation !== state.webrtcGeneration) {
-            return;
-        }
-
-        elements.windowFrame.hidden = false;
-        elements.framePlaceholder.hidden = true;
-        try {
-            await elements.windowFrame.play();
-        } catch {
-        }
-    }, { once: true });
-
-    try {
-        await connected;
-    } catch (error) {
-        if (generation === state.webrtcGeneration) {
-            logClientEvent("error", "Failed to establish the AV1 stream.", {
-                message: error?.message || String(error),
-            });
-            await disconnectWebRtcSession({ clearVideo: true });
-            throw normalizeError(error, "Failed to establish the AV1 stream.");
-        }
-    }
 }
 
 async function connectWebRtcSession(requestedWidth, streamKey, selectedCodec, effectiveCodec) {
@@ -1508,39 +1423,10 @@ async function disconnectWebRtcSession(options = {}) {
     state.activeStreamHandle = null;
     state.activeStreamMaxWidth = null;
 
-    const av1Session = state.av1Session;
     const peerConnection = state.peerConnection;
     const signalingSocket = state.signalingSocket;
-    state.av1Session = null;
     state.peerConnection = null;
     state.signalingSocket = null;
-
-    if (av1Session) {
-        try {
-            av1Session.consumerSession?.close();
-        } catch {
-        }
-        try {
-            av1Session.api?.unregisterAllConnectionListeners?.();
-            av1Session.api?.unregisterAllProducersListeners?.();
-        } catch {
-        }
-        try {
-            av1Session.api?._channel?.close?.();
-        } catch {
-        }
-        await fetch("/api/av1/session/stop", {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                sessionId: av1Session.sessionId,
-            }),
-        }).catch(() => {
-        });
-    }
 
     if (peerConnection) {
         try {
@@ -1670,8 +1556,6 @@ function codecMatchesPreference(codec, codecPreference) {
     switch (codecPreference) {
         case "vp9":
             return fmtp.length === 0 || fmtp.includes("profile-id=0");
-        case "av1":
-            return fmtp.length === 0 || fmtp.includes("profile=0");
         default:
             return true;
     }
@@ -1699,13 +1583,6 @@ function describeCodecPreference(requestedCodec, effectiveCodec) {
     return requestedCodec === "auto"
         ? `Auto→${videoCodecLabel(effectiveCodec)}`
         : videoCodecLabel(effectiveCodec);
-}
-
-function buildAv1SignalingUrl(sessionId) {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = new URL(`${protocol}//${window.location.host}/ws/av1-signaling`);
-    url.searchParams.set("sessionId", sessionId);
-    return url.toString();
 }
 
 function buildWebRtcUrl(handle, maxWidth, frameRate, streamMode, codecPreference) {
@@ -1917,17 +1794,22 @@ function saveVideoCodecPreference(value) {
     }
 }
 
-function loadFilterWtPreference() {
+
+function loadLoopSelection() {
     try {
-        return window.localStorage.getItem(FILTER_WT_STORAGE_KEY) === "true";
+        const raw = window.localStorage.getItem(LOOP_SELECTION_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+        return null;
     } catch {
-        return false;
+        return null;
     }
 }
 
-function saveFilterWtPreference(value) {
+function saveLoopSelection() {
     try {
-        window.localStorage.setItem(FILTER_WT_STORAGE_KEY, value ? "true" : "false");
+        window.localStorage.setItem(LOOP_SELECTION_STORAGE_KEY, JSON.stringify([...state.loopHandles]));
     } catch {
     }
 }
@@ -2371,9 +2253,13 @@ function handleScrollDeltaPixels(deltaPixels) {
     }
 }
 
-function handleScrollPadPointerDown(event) {
+function handleScrollPadPointerDown(event, padElement) {
     if (!state.selectedHandle) {
         return;
+    }
+
+    if (state.scrollPadActive && state.scrollPadPointerId !== null && state.scrollPadPointerId !== event.pointerId) {
+        finishScrollPadInteraction(state.scrollPadPointerId, false);
     }
 
     event.preventDefault();
@@ -2381,10 +2267,11 @@ function handleScrollPadPointerDown(event) {
     state.scrollPadPointerId = event.pointerId;
     state.scrollPadLastClientY = event.clientY;
     state.scrollPadCarry = 0;
-    elements.scrollPad.classList.add("active");
+    state.scrollPadElement = padElement || elements.scrollPad;
+    state.scrollPadElement.classList.add("active");
 
-    if (typeof elements.scrollPad.setPointerCapture === "function") {
-        elements.scrollPad.setPointerCapture(event.pointerId);
+    if (typeof state.scrollPadElement.setPointerCapture === "function") {
+        state.scrollPadElement.setPointerCapture(event.pointerId);
     }
 }
 
@@ -2418,9 +2305,10 @@ function handleScrollPadPointerCancel(event) {
 }
 
 function finishScrollPadInteraction(pointerId, shouldSchedule = true) {
-    if (pointerId !== null && typeof elements.scrollPad.releasePointerCapture === "function") {
+    var activeEl = state.scrollPadElement || elements.scrollPad;
+    if (pointerId !== null && typeof activeEl.releasePointerCapture === "function") {
         try {
-            elements.scrollPad.releasePointerCapture(pointerId);
+            activeEl.releasePointerCapture(pointerId);
         } catch {
         }
     }
@@ -2429,7 +2317,8 @@ function finishScrollPadInteraction(pointerId, shouldSchedule = true) {
     state.scrollPadPointerId = null;
     state.scrollPadLastClientY = null;
     state.scrollPadCarry = 0;
-    elements.scrollPad.classList.remove("active");
+    state.scrollPadElement = null;
+    activeEl.classList.remove("active");
     if (shouldSchedule) {
         scheduleNextFrame(getFrameIntervalMs());
     }

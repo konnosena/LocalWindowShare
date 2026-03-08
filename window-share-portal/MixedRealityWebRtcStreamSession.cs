@@ -701,7 +701,6 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
         {
             WebRtcVideoCodecPreference.VP8 => "VP8",
             WebRtcVideoCodecPreference.VP9 => "VP9",
-            WebRtcVideoCodecPreference.AV1 => "AV1",
             _ => string.Empty,
         };
     }
@@ -713,10 +712,6 @@ internal sealed class MixedRealityWebRtcStreamSession : IWebRtcStreamSession
             case WebRtcVideoCodecPreference.VP9:
                 peerConnection.PreferredVideoCodecExtraParamsLocal = "profile-id=0";
                 peerConnection.PreferredVideoCodecExtraParamsRemote = "profile-id=0";
-                break;
-            case WebRtcVideoCodecPreference.AV1:
-                peerConnection.PreferredVideoCodecExtraParamsLocal = "profile=0;level-idx=5;tier=0";
-                peerConnection.PreferredVideoCodecExtraParamsRemote = "profile=0;level-idx=5;tier=0";
                 break;
             default:
                 peerConnection.PreferredVideoCodecExtraParamsLocal = string.Empty;

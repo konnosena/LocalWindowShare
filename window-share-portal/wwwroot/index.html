@@ -21,15 +21,26 @@
         <div class="viewer-surface">
             <div class="viewer-overlay">
                 <button id="menu-button" class="menu-button" type="button" aria-label="Open menu">&#9776;</button>
-                <button id="window-prev-button" class="header-nav-button" type="button" aria-label="Previous window">&#8249;</button>
+                <div class="mode-toggle">
+                    <button id="mode-window-button" class="mode-toggle-button active" type="button">Win</button>
+                    <button id="mode-monitor-button" class="mode-toggle-button" type="button">Mon</button>
+                </div>
+                <button id="window-prev-button" class="header-nav-button" type="button" aria-label="Previous">&#8249;</button>
                 <p id="viewer-window-title" class="viewer-window-title">No window selected</p>
-                <button id="window-next-button" class="header-nav-button" type="button" aria-label="Next window">&#8250;</button>
+                <button id="window-next-button" class="header-nav-button" type="button" aria-label="Next">&#8250;</button>
+                <div class="mode-toggle">
+                    <button id="touch-mode-pointer" class="mode-toggle-button active" type="button">Ptr</button>
+                    <button id="touch-mode-direct" class="mode-toggle-button" type="button">Touch</button>
+                </div>
             </div>
 
             <div class="frame-stage">
                 <video id="window-frame" autoplay muted playsinline disablepictureinpicture hidden></video>
                 <div id="frame-cursor" class="frame-cursor" hidden aria-hidden="true"></div>
                 <p id="frame-placeholder" class="frame-placeholder">Frame preview will appear here.</p>
+                <div id="scroll-pad-left" class="scroll-rail scroll-rail-left" aria-label="scroll rail left">
+                    <span class="scroll-rail-track" aria-hidden="true"></span>
+                </div>
                 <div id="scroll-pad" class="scroll-rail" aria-label="scroll rail">
                     <span class="scroll-rail-track" aria-hidden="true"></span>
                 </div>
@@ -40,18 +51,18 @@
             <form id="text-form" class="text-dock">
                 <div class="text-dock-row text-dock-row-main">
                     <input id="text-input" name="text" type="text" placeholder="text input" disabled>
-                    <button id="text-submit" type="submit" disabled>Send</button>
+                    <button id="text-submit" type="submit" disabled>&#9166;</button>
                 </div>
                 <div class="text-dock-row text-dock-row-keys">
                     <button class="quick-key-button" data-key="Escape" type="button" disabled>Esc</button>
+                    <button class="quick-key-button" data-key="Ctrl+C" type="button" disabled>C+C</button>
+                    <button class="quick-key-button" data-key="Ctrl+V" type="button" disabled>C+V</button>
                     <button class="quick-key-button" data-key="Up" type="button" disabled>&#8593;</button>
                     <button class="quick-key-button" data-key="Down" type="button" disabled>&#8595;</button>
                     <button class="quick-key-button" data-key="Left" type="button" disabled>&#8592;</button>
                     <button class="quick-key-button" data-key="Right" type="button" disabled>&#8594;</button>
                     <button class="quick-key-button" data-key="Tab" type="button" disabled>Tab</button>
                     <button class="quick-key-button" data-key="Backspace" type="button" disabled>BS</button>
-                    <button class="quick-key-button" data-key="Ctrl+C" type="button" disabled>C+C</button>
-                    <button class="quick-key-button" data-key="Ctrl+V" type="button" disabled>C+V</button>
                 </div>
             </form>
         </div>
@@ -86,27 +97,28 @@
                         <button class="video-codec-button active" data-video-codec="auto" type="button">Auto</button>
                         <button class="video-codec-button" data-video-codec="vp8" type="button">VP8</button>
                         <button class="video-codec-button" data-video-codec="vp9" type="button">VP9</button>
-                        <button class="video-codec-button" data-video-codec="av1" type="button">AV1</button>
                     </div>
                     <p id="video-codec-hint" class="subtle-copy">Auto: 利用可能な codec の中から最適なものを使います。</p>
-                    <div class="fps-row">
-                        <label for="frame-rate-select">FPS</label>
-                        <select id="frame-rate-select" class="setting-select">
-                            <option value="15">15</option>
-                            <option value="30" selected>30</option>
-                            <option value="45">45</option>
-                            <option value="60">60</option>
-                        </select>
-                    </div>
-                    <div class="fps-row">
-                        <label for="resize-scale-select">Resize</label>
-                        <select id="resize-scale-select" class="setting-select">
-                            <option value="1">x1</option>
-                            <option value="1.5">x1.5</option>
-                            <option value="2">x2</option>
-                            <option value="3" selected>x3</option>
-                            <option value="4">x4</option>
-                        </select>
+                    <div class="settings-inline-row">
+                        <div class="fps-row">
+                            <label for="frame-rate-select">FPS</label>
+                            <select id="frame-rate-select" class="setting-select">
+                                <option value="15">15</option>
+                                <option value="30" selected>30</option>
+                                <option value="45">45</option>
+                                <option value="60">60</option>
+                            </select>
+                        </div>
+                        <div class="fps-row">
+                            <label for="resize-scale-select">Resize</label>
+                            <select id="resize-scale-select" class="setting-select">
+                                <option value="1">x1</option>
+                                <option value="1.5">x1.5</option>
+                                <option value="2">x2</option>
+                                <option value="3" selected>x3</option>
+                                <option value="4">x4</option>
+                            </select>
+                        </div>
                     </div>
                 </section>
 
@@ -115,15 +127,25 @@
                         <h3>Windows</h3>
                         <button id="refresh-button" class="ghost-button" type="button">Refresh</button>
                     </div>
+                    <div class="select-row">
+                        <button id="select-all-button" class="ghost-button" type="button">All</button>
+                        <button id="select-wt-button" class="ghost-button" type="button">WT</button>
+                        <button id="select-none-button" class="ghost-button" type="button">None</button>
+                    </div>
+                    <div id="window-list" class="window-list"></div>
+                </section>
+
+                <section class="drawer-section">
+                    <h3>Monitors</h3>
+                    <div id="monitor-list" class="window-list"></div>
+                </section>
+
+                <section class="drawer-section">
+                    <h3>Launch</h3>
                     <div class="button-row">
                         <button id="launch-explorer" class="ghost-button" type="button">Explorer</button>
                         <button id="launch-cmd" class="ghost-button" type="button">CMD</button>
                     </div>
-                    <label class="filter-toggle">
-                        <input id="filter-wt-checkbox" type="checkbox">
-                        <span>Windows Terminal のみ</span>
-                    </label>
-                    <div id="window-list" class="window-list"></div>
                 </section>
 
             </div>
@@ -134,7 +156,6 @@
         </aside>
     </section>
 
-    <script src="/vendor/gstwebrtc-api-2.0.0.min.js" defer></script>
     <script src="/app.js" defer></script>
 </body>
 </html>

@@ -1,7 +1,19 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dotnet build:*)"
+      "Bash(dotnet build:*)",
+      "Read(//c/Users/konno/.nuget/packages/sipsorcery/10.0.3/lib/net8.0/**)",
+      "Read(//c/Users/konno/.nuget/packages/sipsorcery/10.0.3/lib/**)",
+      "Read(//c/Users/konno/.nuget/packages/sipsorcerymedia.encoders/10.0.4/lib/**)",
+      "Read(//c/Users/konno/.nuget/packages/sipsorcerymedia.abstractions/**)",
+      "Bash(dotnet list:*)",
+      "WebSearch",
+      "WebFetch(domain:www.nuget.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:sipsorcery-org.github.io)",
+      "Bash(python3:*)",
+      "Bash(grep:*)"
     ]
   }
 }

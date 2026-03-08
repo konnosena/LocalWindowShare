@@ -9,7 +9,6 @@ internal sealed class MixedRealityWebRtcStreamSessionFactory : IWebRtcStreamSess
         new("auto", "Auto", true, "15/30fps は VP9、45/60fps と Speed は VP8 を優先します。"),
         new("vp8", "VP8", true, "互換性優先です。"),
         new("vp9", "VP9", true, "高効率です。profile-id=0 を優先して接続します。"),
-        new("av1", "AV1", false, "libwebrtc backend では未使用です。"),
     ];
 
     public WebRtcVideoCodecPreference NormalizeRequestedVideoCodecPreference(WebRtcVideoCodecPreference requestedPreference)

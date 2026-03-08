@@ -12,7 +12,6 @@ internal sealed class PortalServer : IAsyncDisposable
     private readonly PortalLogStore _logStore;
     private readonly PortalSessionStore _sessionStore;
     private readonly IWebRtcStreamSessionFactory _webRtcStreamSessionFactory;
-    private readonly GStreamerAv1SessionManager _av1SessionManager;
     private WebApplication? _app;
 
     public PortalServer(
@@ -22,8 +21,7 @@ internal sealed class PortalServer : IAsyncDisposable
         ClientConnectionTracker connectionTracker,
         PortalLogStore logStore,
         PortalSessionStore sessionStore,
-        IWebRtcStreamSessionFactory webRtcStreamSessionFactory,
-        GStreamerAv1SessionManager av1SessionManager)
+        IWebRtcStreamSessionFactory webRtcStreamSessionFactory)
     {
         _args = args;
         _contentRoot = contentRoot;
@@ -32,7 +30,6 @@ internal sealed class PortalServer : IAsyncDisposable
         _logStore = logStore;
         _sessionStore = sessionStore;
         _webRtcStreamSessionFactory = webRtcStreamSessionFactory;
-        _av1SessionManager = av1SessionManager;
     }
 
     public bool IsRunning => _app is not null;
@@ -76,7 +73,6 @@ internal sealed class PortalServer : IAsyncDisposable
         builder.Services.AddSingleton(_connectionTracker);
         builder.Services.AddSingleton(_logStore);
         builder.Services.AddSingleton(_sessionStore);
-        builder.Services.AddSingleton(_av1SessionManager);
         builder.Services.AddSingleton<WindowBroker>();
 
         var app = builder.Build();
@@ -251,8 +247,6 @@ internal sealed class PortalServer : IAsyncDisposable
                 "Some GPU-accelerated windows may return incomplete frames through PrintWindow.",
             },
             webRtcBackend = _webRtcStreamSessionFactory.BackendName,
-            av1Backend = _av1SessionManager.BackendName,
-            av1BackendAvailable = _av1SessionManager.IsAvailable,
         }));
 
         app.MapGet("/api/windows", (WindowBroker broker) => Results.Ok(new
@@ -352,41 +346,6 @@ internal sealed class PortalServer : IAsyncDisposable
             return error is null
                 ? Results.Ok(new { ok = true })
                 : Results.Json(new { message = error.Message }, statusCode: error.StatusCode);
-        });
-
-        app.MapPost("/api/av1/session", async (Av1SessionRequest request, WindowBroker broker, CancellationToken cancellationToken) =>
-        {
-            if (!_av1SessionManager.IsAvailable)
-            {
-                return Results.Json(new { message = _av1SessionManager.AvailabilityMessage }, statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            var frameRate = request.FrameRate is >= 15 and <= 60 ? request.FrameRate : 30;
-            var streamMode = StreamTuningModeParser.Parse(request.StreamMode);
-
-            try
-            {
-                var session = await _av1SessionManager.StartOrUpdateAsync(
-                    broker,
-                    request.Handle,
-                    request.MaxWidth,
-                    frameRate,
-                    streamMode,
-                    cancellationToken);
-
-                return Results.Ok(session);
-            }
-            catch (Exception ex)
-            {
-                _logStore.AddError("av1", $"Failed to start AV1 session for HWND {request.Handle}.{Environment.NewLine}{ex}");
-                return Results.Json(new { message = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
-            }
-        });
-
-        app.MapPost("/api/av1/session/stop", async (Av1SessionStopRequest request) =>
-        {
-            await _av1SessionManager.StopAsync(request.SessionId);
-            return Results.Ok(new { ok = true });
         });
 
         app.MapPost("/api/launch", (LaunchAppRequest request, PortalLogStore logStore) =>
@@ -490,59 +449,11 @@ internal sealed class PortalServer : IAsyncDisposable
             }
         });
 
-        app.Map("/ws/av1-signaling", async context =>
-        {
-            if (!context.WebSockets.IsWebSocketRequest)
-            {
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsync("WebSocket upgrade required.");
-                return;
-            }
-
-            if (!IsAuthorized(context))
-            {
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                return;
-            }
-
-            var sessionId = context.Request.Query["sessionId"].ToString();
-            if (string.IsNullOrWhiteSpace(sessionId))
-            {
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsync("Missing sessionId.");
-                return;
-            }
-
-            using var socket = await context.WebSockets.AcceptWebSocketAsync();
-            await _av1SessionManager.ProxySignalingSocketAsync(sessionId, socket, context.RequestAborted);
-        });
     }
 
     private IReadOnlyList<WebRtcVideoCodecOption> BuildVideoCodecOptions()
     {
-        var options = _webRtcStreamSessionFactory.SupportedVideoCodecOptions
-            .Select(option => option with { })
-            .ToList();
-
-        var av1Option = new WebRtcVideoCodecOption(
-            "av1",
-            "AV1",
-            _av1SessionManager.IsAvailable,
-            _av1SessionManager.IsAvailable
-                ? "高圧縮です。AV1 は GStreamer backend で配信します。"
-                : $"現在は未対応です。{_av1SessionManager.AvailabilityMessage}");
-
-        var av1Index = options.FindIndex(option => string.Equals(option.Value, "av1", StringComparison.OrdinalIgnoreCase));
-        if (av1Index >= 0)
-        {
-            options[av1Index] = av1Option;
-        }
-        else
-        {
-            options.Add(av1Option);
-        }
-
-        return options;
+        return _webRtcStreamSessionFactory.SupportedVideoCodecOptions;
     }
 
     private bool IsAuthorized(HttpContext context)

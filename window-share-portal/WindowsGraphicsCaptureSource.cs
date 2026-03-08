@@ -51,6 +51,33 @@ internal sealed class WindowsGraphicsCaptureSource : IAsyncDisposable
         _item.Closed += HandleItemClosed;
     }
 
+    private WindowsGraphicsCaptureSource(GraphicsCaptureItem item)
+    {
+        _item = item;
+        _device = CreateDirect3DDevice();
+        _lastSize = _item.Size;
+        _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+            _device,
+            DirectXPixelFormat.B8G8R8A8UIntNormalized,
+            2,
+            _lastSize);
+        _session = _framePool.CreateCaptureSession(_item);
+        _session.IsCursorCaptureEnabled = false;
+        _framePool.FrameArrived += HandleFrameArrived;
+        _item.Closed += HandleItemClosed;
+    }
+
+    public static WindowsGraphicsCaptureSource CreateForMonitor(nint monitorHandle)
+    {
+        if (!GraphicsCaptureSession.IsSupported())
+        {
+            throw new NotSupportedException("Windows Graphics Capture is not supported on this machine.");
+        }
+
+        var item = CreateItemForMonitor(monitorHandle);
+        return new WindowsGraphicsCaptureSource(item);
+    }
+
     public static bool IsSupported => GraphicsCaptureSession.IsSupported();
 
     public void Start()
@@ -231,6 +258,51 @@ internal sealed class WindowsGraphicsCaptureSource : IAsyncDisposable
             try
             {
                 CheckHResult(interop.CreateForWindow(windowHandle, typeof(GraphicsCaptureItem).GUID, out var itemPointer));
+                try
+                {
+                    return MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPointer);
+                }
+                finally
+                {
+                    Marshal.Release(itemPointer);
+                }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(interop);
+            }
+        }
+        finally
+        {
+            if (factoryPointer != nint.Zero)
+            {
+                Marshal.Release(factoryPointer);
+            }
+
+            if (classId != nint.Zero)
+            {
+                WindowsDeleteString(classId);
+            }
+        }
+    }
+
+    private static GraphicsCaptureItem CreateItemForMonitor(nint monitorHandle)
+    {
+        var className = "Windows.Graphics.Capture.GraphicsCaptureItem";
+        nint classId = nint.Zero;
+        nint factoryPointer = nint.Zero;
+
+        try
+        {
+            CheckHResult(WindowsCreateString(className, className.Length, out classId));
+            CheckHResult(RoGetActivationFactory(classId, GraphicsCaptureItemInteropId, out factoryPointer));
+            var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPointer);
+            Marshal.Release(factoryPointer);
+            factoryPointer = nint.Zero;
+
+            try
+            {
+                CheckHResult(interop.CreateForMonitor(monitorHandle, typeof(GraphicsCaptureItem).GUID, out var itemPointer));
                 try
                 {
                     return MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPointer);
