@@ -4,6 +4,12 @@
 
 Claude Code、Codex、Gemini CLI などのコーディング CLI を、トイレやお風呂など PC の前を離れた場所からスマートフォンで操作することを主な目的として作りました。ブラウザさえあれば、自宅 LAN 内または Tailscale 等の VPN 経由で利用してください。
 
+## スクリーンショット
+
+| 管理画面 (WPF) | スマホ操作画面 |
+|:-:|:-:|
+| ![管理画面](docs/screenshot-admin.webp) | ![スマホ操作画面](docs/screenshot-sp.webp) |
+
 ## 通常のリモートデスクトップとの違い
 
 一般的なリモートデスクトップは画面全体を転送しますが、Local Window Share は**ウィンドウ単位**で操作できます。
