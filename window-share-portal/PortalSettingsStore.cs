@@ -50,7 +50,11 @@ internal sealed class PortalSettingsStore
         var disabledAccessRules = ResolveDisabledAccessRules(payload, port, manualAccessRules);
         var loadedFromSettings = !string.IsNullOrWhiteSpace(persistedToken) || payload?.Port is > 0 and <= 65535;
 
-        Save(token, port, windowPlacement, manualAccessRules, disabledAccessRules);
+        var clientApprovalRequired = payload?.ClientApprovalRequired ?? true;
+        var approvedClients = payload?.ApprovedClients ?? [];
+
+        Save(token, port, windowPlacement, manualAccessRules, disabledAccessRules,
+            clientApprovalRequired, approvedClients);
         return new PortalSettings(
             token,
             port,
@@ -59,7 +63,9 @@ internal sealed class PortalSettingsStore
             disabledAccessRules,
             loadedFromSettings
                 ? "GUI settings"
-                : string.IsNullOrWhiteSpace(initialToken) ? "Generated at first launch" : "Seeded from environment");
+                : string.IsNullOrWhiteSpace(initialToken) ? "Generated at first launch" : "Seeded from environment",
+            clientApprovalRequired,
+            approvedClients);
     }
 
     public void Save(
@@ -67,7 +73,9 @@ internal sealed class PortalSettingsStore
         int port,
         PortalWindowPlacement? windowPlacement,
         PortalManualAccessRules? manualAccessRules,
-        PortalDisabledAccessRules? disabledAccessRules)
+        PortalDisabledAccessRules? disabledAccessRules,
+        bool? clientApprovalRequired = null,
+        ApprovedClientEntry[]? approvedClients = null)
     {
         var normalizedToken = token.Trim();
         if (string.IsNullOrWhiteSpace(normalizedToken))
@@ -98,10 +106,34 @@ internal sealed class PortalSettingsStore
             DisabledAccessRules = normalizedDisabledAccessRules,
             AccessRulesConfigured = true,
             AccessRulesVersion = CurrentAccessRulesVersion,
+            ClientApprovalRequired = clientApprovalRequired,
+            ApprovedClients = approvedClients,
         };
 
         File.WriteAllText(temporaryPath, JsonSerializer.Serialize(document, JsonOptions));
         File.Move(temporaryPath, _settingsPath, overwrite: true);
+    }
+
+    public void SaveClientApproval(bool approvalRequired, ApprovedClientEntry[] approvedClients)
+    {
+        PortalSettingsDocument? existing = null;
+        try
+        {
+            if (File.Exists(_settingsPath))
+                existing = JsonSerializer.Deserialize<PortalSettingsDocument>(File.ReadAllText(_settingsPath));
+        }
+        catch { }
+
+        if (existing is null)
+            return;
+
+        var token = ReadPersistedToken(existing);
+        if (string.IsNullOrWhiteSpace(token) || existing.Port is not (> 0 and <= 65535))
+            return;
+
+        Save(token, existing.Port.Value, existing.WindowPlacement,
+            existing.ManualAccessRules, existing.DisabledAccessRules,
+            approvalRequired, approvedClients);
     }
 
     private static PortalWindowPlacement? NormalizeWindowPlacement(PortalWindowPlacement? placement)
@@ -235,6 +267,10 @@ internal sealed class PortalSettingsStore
         public bool? AccessRulesConfigured { get; init; }
 
         public int? AccessRulesVersion { get; init; }
+
+        public bool? ClientApprovalRequired { get; init; }
+
+        public ApprovedClientEntry[]? ApprovedClients { get; init; }
     }
 
     private delegate bool TryNormalizeValue(string? value, out string normalized);
@@ -246,7 +282,9 @@ internal sealed record PortalSettings(
     PortalWindowPlacement? WindowPlacement,
     PortalManualAccessRules ManualAccessRules,
     PortalDisabledAccessRules DisabledAccessRules,
-    string TokenModeLabel);
+    string TokenModeLabel,
+    bool ClientApprovalRequired,
+    ApprovedClientEntry[] ApprovedClients);
 
 internal sealed record PortalManualAccessRules(string[] BindAddresses, string[] AllowedAddresses, string[] AllowedNetworks)
 {

@@ -201,7 +201,7 @@ internal sealed class ClientConnectionTracker
         }
     }
 
-    private static string DescribeClientEnvironment(string userAgent)
+    internal static string DescribeClientEnvironment(string userAgent)
     {
         if (string.IsNullOrWhiteSpace(userAgent))
         {

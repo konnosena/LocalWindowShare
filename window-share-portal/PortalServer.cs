@@ -12,6 +12,7 @@ internal sealed class PortalServer : IAsyncDisposable
     private readonly PortalLogStore _logStore;
     private readonly PortalSessionStore _sessionStore;
     private readonly IWebRtcStreamSessionFactory _webRtcStreamSessionFactory;
+    private readonly ClientApprovalService _approvalService;
     private WebApplication? _app;
 
     public PortalServer(
@@ -21,7 +22,8 @@ internal sealed class PortalServer : IAsyncDisposable
         ClientConnectionTracker connectionTracker,
         PortalLogStore logStore,
         PortalSessionStore sessionStore,
-        IWebRtcStreamSessionFactory webRtcStreamSessionFactory)
+        IWebRtcStreamSessionFactory webRtcStreamSessionFactory,
+        ClientApprovalService approvalService)
     {
         _args = args;
         _contentRoot = contentRoot;
@@ -30,6 +32,7 @@ internal sealed class PortalServer : IAsyncDisposable
         _logStore = logStore;
         _sessionStore = sessionStore;
         _webRtcStreamSessionFactory = webRtcStreamSessionFactory;
+        _approvalService = approvalService;
     }
 
     public bool IsRunning => _app is not null;
@@ -191,11 +194,25 @@ internal sealed class PortalServer : IAsyncDisposable
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         });
 
-        app.MapPost("/api/login", (LoginRequest request, HttpContext context, HttpResponse response) =>
+        app.MapPost("/api/login", async (LoginRequest request, HttpContext context, HttpResponse response) =>
         {
             if (!FixedTimeEquals(request.Token, _runtimeState.Token))
             {
                 return Results.Unauthorized();
+            }
+
+            if (_approvalService.NeedsApproval(context.Connection.RemoteIpAddress))
+            {
+                var userAgent = context.Request.Headers.UserAgent.ToString();
+                var remoteIp = context.Connection.RemoteIpAddress!;
+                _logStore.AddInformation("approval", $"New client approval requested: {remoteIp} ({userAgent})");
+                var approved = await _approvalService.RequestApprovalAsync(remoteIp, userAgent, context.RequestAborted);
+                if (!approved)
+                {
+                    _logStore.AddWarning("approval", $"Client approval denied or timed out: {remoteIp}");
+                    return Results.Json(new { ok = false, reason = "approval_required" }, statusCode: 403);
+                }
+                _logStore.AddInformation("approval", $"Client approved: {remoteIp}");
             }
 
             var sessionId = _sessionStore.CreateSession(_runtimeState.Token);

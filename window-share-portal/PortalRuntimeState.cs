@@ -55,8 +55,6 @@ internal sealed class PortalRuntimeState
 
     public IReadOnlyList<string> ListenUrls => CurrentAccessPolicy.DisplayUrls.ToArray();
 
-    public IReadOnlyList<AccessListItem> AllowedAddressEntries => CurrentAccessPolicy.AllowedAddressEntries.ToArray();
-
     public IReadOnlyList<string> AllowedAddressLabels => CurrentAccessPolicy.AllowedAddressLabels.ToArray();
 
     public IReadOnlyList<AccessListItem> AllowedNetworkEntries => CurrentAccessPolicy.AllowedNetworkEntries.ToArray();
@@ -87,8 +85,8 @@ internal sealed class PortalRuntimeState
             {
                 return new PortalDisabledAccessRules(
                     _disabledAccessRules.BindAddresses.ToArray(),
-                    _disabledAccessRules.AllowedAddresses.ToArray(),
-                    _disabledAccessRules.AllowedNetworks.ToArray());
+                    [],
+                    []);
             }
         }
     }
@@ -224,25 +222,6 @@ internal sealed class PortalRuntimeState
             current.AllowedNetworks));
     }
 
-    public void SetAllowedAddressEnabled(string value, bool isEnabled)
-    {
-        var normalized = NetworkAccessPolicy.NormalizeAllowedAddressOrThrow(value);
-        var current = DisabledAccessRules;
-        UpdateDisabledAccessRules(new PortalDisabledAccessRules(
-            current.BindAddresses,
-            SetEnabledState(current.AllowedAddresses, normalized, isEnabled),
-            current.AllowedNetworks));
-    }
-
-    public void SetAllowedNetworkEnabled(string value, bool isEnabled)
-    {
-        var normalized = NetworkAccessPolicy.NormalizeAllowedNetworkOrThrow(value);
-        var current = DisabledAccessRules;
-        UpdateDisabledAccessRules(new PortalDisabledAccessRules(
-            current.BindAddresses,
-            current.AllowedAddresses,
-            SetEnabledState(current.AllowedNetworks, normalized, isEnabled)));
-    }
 
     private static string[] SetEnabledState(IEnumerable<string> currentDisabledValues, string rawValue, bool isEnabled)
     {

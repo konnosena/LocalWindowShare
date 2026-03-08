@@ -3,22 +3,19 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-
         var contentRoot = ResolveContentRoot(AppContext.BaseDirectory);
         var settingsStore = new PortalSettingsStore();
         var listenPort = ResolveListenPort();
         var settings = settingsStore.Load(Environment.GetEnvironmentVariable("WINDOW_SHARE_PORTAL_TOKEN"), listenPort);
         var runtimeState = new PortalRuntimeState(settings, settingsStore);
+        var approvalService = new ClientApprovalService(settingsStore, settings.ClientApprovalRequired, settings.ApprovedClients);
         var connectionTracker = new ClientConnectionTracker();
         using var fileLogWriter = new PortalFileLogWriter(contentRoot);
         var logStore = new PortalLogStore(fileLogWriter: fileLogWriter);
         var sessionStore = new PortalSessionStore();
         var backendSelection = WebRtcBackendSelection.Resolve();
         var webRtcStreamSessionFactory = backendSelection.Factory;
-        var server = new PortalServer(args, contentRoot, runtimeState, connectionTracker, logStore, sessionStore, webRtcStreamSessionFactory);
+        var server = new PortalServer(args, contentRoot, runtimeState, connectionTracker, logStore, sessionStore, webRtcStreamSessionFactory, approvalService);
         if (backendSelection.UsedFallback)
         {
             logStore.AddWarning("startup", $"Unknown WINDOW_SHARE_PORTAL_WEBRTC_BACKEND value '{backendSelection.ConfiguredValue}'. Falling back to {backendSelection.EffectiveValue}.");
@@ -32,8 +29,15 @@ internal static class Program
 
         try
         {
-            using var form = new PortalControlForm(runtimeState, connectionTracker, logStore, server);
-            Application.Run(form);
+            var app = new System.Windows.Application();
+            app.DispatcherUnhandledException += (_, eventArgs) =>
+            {
+                logStore.AddError("wpf", $"Unhandled dispatcher exception.{Environment.NewLine}{eventArgs.Exception}");
+                eventArgs.Handled = true;
+            };
+
+            var window = new MainWindow(runtimeState, connectionTracker, logStore, server, approvalService);
+            app.Run(window);
             return 0;
         }
         catch (Exception exception)
@@ -49,12 +53,6 @@ internal static class Program
 
     private static void RegisterGlobalExceptionLogging(PortalLogStore logStore)
     {
-        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-        Application.ThreadException += (_, eventArgs) =>
-        {
-            logStore.AddError("winforms", $"Unhandled UI exception.{Environment.NewLine}{eventArgs.Exception}");
-        };
-
         AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
         {
             if (eventArgs.ExceptionObject is Exception exception)
