@@ -39,11 +39,11 @@ internal sealed class WindowBroker
             .ThenBy(window => window.Title, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var screens = Screen.AllScreens;
-        for (var i = 0; i < screens.Length; i++)
+        var monitors = EnumeratePhysicalMonitors();
+        for (var i = 0; i < monitors.Count; i++)
         {
-            var screen = screens[i];
-            var label = screen.Primary ? $"Screen {i + 1} (Primary)" : $"Screen {i + 1}";
+            var mon = monitors[i];
+            var label = mon.IsPrimary ? $"Screen {i + 1} (Primary)" : $"Screen {i + 1}";
             sortedWindows.Insert(0, new WindowSummary(
                 MakeScreenHandle(i),
                 label,
@@ -52,7 +52,7 @@ internal sealed class WindowBroker
                 "Monitor",
                 false,
                 false,
-                new WindowBounds(screen.Bounds.Left, screen.Bounds.Top, screen.Bounds.Width, screen.Bounds.Height)));
+                new WindowBounds(mon.Bounds.Left, mon.Bounds.Top, mon.Bounds.Width, mon.Bounds.Height)));
         }
 
         return sortedWindows.ToArray();
@@ -405,14 +405,14 @@ internal sealed class WindowBroker
     {
         summary = default!;
         var index = GetScreenIndex(handle);
-        var screens = Screen.AllScreens;
-        if (index < 0 || index >= screens.Length)
+        var monitors = EnumeratePhysicalMonitors();
+        if (index < 0 || index >= monitors.Count)
         {
             return false;
         }
 
-        var screen = screens[index];
-        var label = screen.Primary ? $"Screen {index + 1} (Primary)" : $"Screen {index + 1}";
+        var mon = monitors[index];
+        var label = mon.IsPrimary ? $"Screen {index + 1} (Primary)" : $"Screen {index + 1}";
         summary = new WindowSummary(
             handle,
             label,
@@ -421,25 +421,20 @@ internal sealed class WindowBroker
             "Monitor",
             false,
             false,
-            new WindowBounds(screen.Bounds.Left, screen.Bounds.Top, screen.Bounds.Width, screen.Bounds.Height));
+            new WindowBounds(mon.Bounds.Left, mon.Bounds.Top, mon.Bounds.Width, mon.Bounds.Height));
         return true;
     }
 
     public nint GetMonitorHandleForScreen(long handle)
     {
         var index = GetScreenIndex(handle);
-        var screens = Screen.AllScreens;
-        if (index < 0 || index >= screens.Length)
+        var monitors = EnumeratePhysicalMonitors();
+        if (index < 0 || index >= monitors.Count)
         {
             return nint.Zero;
         }
 
-        var screen = screens[index];
-        var centerX = screen.Bounds.Left + screen.Bounds.Width / 2;
-        var centerY = screen.Bounds.Top + screen.Bounds.Height / 2;
-        return NativeMethods.MonitorFromPoint(
-            new NativeMethods.POINT { X = centerX, Y = centerY },
-            NativeMethods.MONITOR_DEFAULTTONEAREST);
+        return monitors[index].Handle;
     }
 
     private bool TryCaptureScreen(long handle, int? maxWidth, int? quality, string? format, out WindowFrame frame, out string message, out int statusCode)
@@ -1137,6 +1132,35 @@ internal sealed class WindowBroker
             _ => throw new ArgumentOutOfRangeException(nameof(button), button, null),
         };
     }
+
+    private static List<PhysicalMonitorInfo> EnumeratePhysicalMonitors()
+    {
+        var monitors = new List<PhysicalMonitorInfo>();
+        NativeMethods.EnumDisplayMonitors(nint.Zero, nint.Zero, (nint hMonitor, nint _, ref NativeMethods.RECT _, nint _) =>
+        {
+            var info = new NativeMethods.MONITORINFOEX();
+            info.CbSize = Marshal.SizeOf<NativeMethods.MONITORINFOEX>();
+            if (NativeMethods.GetMonitorInfo(hMonitor, ref info))
+            {
+                var isPrimary = (info.DwFlags & NativeMethods.MONITORINFOEX.MONITORINFOF_PRIMARY) != 0;
+                monitors.Add(new PhysicalMonitorInfo(hMonitor, info.RcMonitor.ToRectangle(), isPrimary));
+            }
+
+            return true;
+        }, nint.Zero);
+
+        // Primary first, then by position
+        monitors.Sort((a, b) =>
+        {
+            if (a.IsPrimary != b.IsPrimary) return a.IsPrimary ? -1 : 1;
+            var cmp = a.Bounds.Left.CompareTo(b.Bounds.Left);
+            return cmp != 0 ? cmp : a.Bounds.Top.CompareTo(b.Bounds.Top);
+        });
+
+        return monitors;
+    }
+
+    private sealed record PhysicalMonitorInfo(nint Handle, Rectangle Bounds, bool IsPrimary);
 }
 
 internal enum MouseButton

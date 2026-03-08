@@ -3,6 +3,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        NativeMethods.TryEnableDpiAwareness();
         var contentRoot = ResolveContentRoot(AppContext.BaseDirectory);
         var settingsStore = new PortalSettingsStore();
         var listenPort = ResolveListenPort();

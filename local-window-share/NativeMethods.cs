@@ -135,6 +135,28 @@ internal static class NativeMethods
 
     internal const uint MONITOR_DEFAULTTONEAREST = 2;
 
+    internal delegate bool MonitorEnumProc(nint hMonitor, nint hdcMonitor, ref RECT lprcMonitor, nint dwData);
+
+    [DllImport("user32.dll")]
+    internal static extern bool EnumDisplayMonitors(nint hdc, nint lprcClip, MonitorEnumProc lpfnEnum, nint dwData);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern bool GetMonitorInfo(nint hMonitor, ref MONITORINFOEX lpmi);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct MONITORINFOEX
+    {
+        public int CbSize;
+        public RECT RcMonitor;
+        public RECT RcWork;
+        public uint DwFlags;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string SzDevice;
+
+        internal const uint MONITORINFOF_PRIMARY = 1;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetProcessDpiAwarenessContext(nint dpiContext);
 
