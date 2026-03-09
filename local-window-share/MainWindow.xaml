@@ -495,35 +495,6 @@
                                  ScrollViewer.VerticalScrollBarVisibility="Disabled"
                                  Tag="BindAddress"/>
 
-                        <!-- Manual Allowed Networks -->
-                        <Border Height="1" Background="#30363d" Margin="10,8"/>
-                        <TextBlock Text="&#x8A31;&#x53EF;&#x30CD;&#x30C3;&#x30C8;&#x30EF;&#x30FC;&#x30AF;&#x8FFD;&#x52A0;" Foreground="#484f58" FontSize="11"
-                                   FontWeight="SemiBold" Margin="10,2,0,4"/>
-                        <StackPanel Orientation="Horizontal" Margin="10,0,0,4">
-                            <TextBox x:Name="AllowedNetworkInput" Width="200"
-                                     Style="{StaticResource ModernTextBox}"
-                                     FontFamily="Cascadia Mono, Consolas" FontSize="12"/>
-                            <Button Content="&#x8FFD;&#x52A0;" Margin="6,0,0,0"
-                                    Style="{StaticResource PrimaryButton}" Padding="10,5" FontSize="12"
-                                    Click="OnAddAllowedNetwork"/>
-                        </StackPanel>
-                        <TextBlock Text="&#x4F8B;: 100.64.0.0/10 (Tailscale)" Foreground="#30363d" FontSize="10"
-                                   Margin="10,0,0,2"/>
-                        <ItemsControl x:Name="ManualNetworksList">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal" Margin="10,2,0,2">
-                                        <Button Content="&#xD7;" Style="{StaticResource ModernButton}"
-                                                Padding="5,1" FontSize="13" Foreground="#f85149"
-                                                Click="OnRemoveAllowedNetwork" Tag="{Binding Cidr}"
-                                                VerticalAlignment="Center"/>
-                                        <TextBlock Text="{Binding Cidr}" Foreground="#c9d1d9"
-                                                   FontFamily="Cascadia Mono, Consolas" FontSize="12"
-                                                   VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -532,6 +503,8 @@
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" MaxHeight="260"/>
+                    <RowDefinition Height="10"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="10"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
@@ -608,8 +581,42 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Connected Clients -->
+                <!-- Manual Allowed Networks -->
                 <Border Grid.Row="2" Background="#161b22" CornerRadius="8"
+                        BorderBrush="#30363d" BorderThickness="1" Padding="14,10">
+                    <StackPanel>
+                        <TextBlock Text="&#x8A31;&#x53EF;&#x30CD;&#x30C3;&#x30C8;&#x30EF;&#x30FC;&#x30AF;&#x8FFD;&#x52A0;" Foreground="#e6edf3" FontSize="13"
+                                   FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBox x:Name="AllowedNetworkInput" Width="200"
+                                     Style="{StaticResource ModernTextBox}"
+                                     FontFamily="Cascadia Mono, Consolas" FontSize="12"/>
+                            <Button Content="&#x8FFD;&#x52A0;" Margin="6,0,0,0"
+                                    Style="{StaticResource PrimaryButton}" Padding="10,5" FontSize="12"
+                                    Click="OnAddAllowedNetwork"/>
+                        </StackPanel>
+                        <TextBlock Text="&#x4F8B;: 100.64.0.0/10 (Tailscale)" Foreground="#30363d" FontSize="10"
+                                   Margin="0,0,0,2"/>
+                        <ItemsControl x:Name="ManualNetworksList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
+                                        <Button Content="&#xD7;" Style="{StaticResource ModernButton}"
+                                                Padding="5,1" FontSize="13" Foreground="#f85149"
+                                                Click="OnRemoveAllowedNetwork" Tag="{Binding Cidr}"
+                                                VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Cidr}" Foreground="#c9d1d9"
+                                                   FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                                                   VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- Connected Clients -->
+                <Border Grid.Row="4" Background="#161b22" CornerRadius="8"
                         BorderBrush="#30363d" BorderThickness="1" Padding="14,10">
                     <Grid>
                         <Grid.RowDefinitions>

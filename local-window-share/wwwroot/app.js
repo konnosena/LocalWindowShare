@@ -2447,10 +2447,8 @@ function handleDirectTouchStart(event) {
 
     state.directTouchHoldTimer = window.setTimeout(() => {
         if (state.directTouchMode === null && state.directTouchId !== null) {
-            state.directTouchMode = "longpress";
-            sendPointerAction("move", state.directTouchStartRatio).catch(showTransientError);
-            sendPointerAction("click", state.directTouchStartRatio, { button: "right" }).catch(showTransientError);
-            elements.viewerStatus.textContent = "Right click sent.";
+            state.directTouchMode = "held";
+            elements.viewerStatus.textContent = "Hold — release for right click, drag to move.";
         }
     }, DIRECT_TAP_HOLD_MS);
 }
@@ -2486,6 +2484,18 @@ function handleDirectTouchMove(event) {
             clearTimeout(state.directTouchHoldTimer);
             state.directTouchHoldTimer = null;
         }
+    }
+
+    if (state.directTouchMode === "held") {
+        const dist = distanceBetween(point, state.directTouchStartPoint ?? point);
+        if (dist >= TOUCH_MOVE_THRESHOLD) {
+            // 長押し後に移動 → ドラッグ開始
+            state.directTouchMode = "drag";
+            sendPointerAction("move", state.directTouchStartRatio).catch(showTransientError);
+            sendPointerAction("down", state.directTouchStartRatio).catch(showTransientError);
+            elements.viewerStatus.textContent = "Dragging…";
+        }
+        return;
     }
 
     if (state.directTouchMode === "scroll") {
@@ -2527,8 +2537,11 @@ function handleDirectTouchEnd(event) {
         const finalRatio = getFrameRatiosFromClient(ended.clientX, ended.clientY) || ratio;
         sendPointerAction("up", finalRatio).catch(showTransientError);
         elements.viewerStatus.textContent = "Drag finished.";
-    } else if (mode === "longpress") {
-        // 長押し右クリックは既に送信済み → 何もしない
+    } else if (mode === "held" && ratio) {
+        // 長押し後に動かさず離した → 右クリック
+        sendPointerAction("move", ratio).catch(showTransientError);
+        sendPointerAction("click", ratio, { button: "right" }).catch(showTransientError);
+        elements.viewerStatus.textContent = "Right click sent.";
     } else if (mode === "scroll") {
         elements.viewerStatus.textContent = "Scroll finished.";
     } else if (mode === null && ratio) {

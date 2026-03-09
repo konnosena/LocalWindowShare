@@ -210,6 +210,14 @@ internal sealed class NetworkAccessPolicy
 
     public IReadOnlyList<string> AllowedNetworkLabels { get; }
 
+    public bool IsBindAddressEnabled(IPAddress? localAddress)
+    {
+        if (localAddress is null) return false;
+        var normalized = NormalizeAddress(localAddress);
+        if (IPAddress.IsLoopback(normalized)) return true;
+        return BindAddresses.Any(a => a.Equals(normalized));
+    }
+
     public bool IsAllowed(IPAddress? remoteAddress)
     {
         if (remoteAddress is null)

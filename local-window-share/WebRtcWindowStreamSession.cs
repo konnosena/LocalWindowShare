@@ -620,11 +620,13 @@ internal sealed class WebRtcWindowStreamSession : IWebRtcStreamSession
         TrackSourceFrameSizeChange(_currentWindowHandle, sourceWidth, sourceHeight, "bitmap");
         EnsureStableEncodedFrameSize(sourceWidth, sourceHeight);
 
-        using var normalizedBitmap = NormalizeBitmapForEncoding(bitmap, sourceWidth, sourceHeight);
+        var needsNormalization = sourceWidth != _encodedFrameWidth || sourceHeight != _encodedFrameHeight || bitmap.Width != sourceWidth || bitmap.Height != sourceHeight;
+        Bitmap? normalizedBitmap = needsNormalization ? NormalizeBitmapForEncoding(bitmap, sourceWidth, sourceHeight) : null;
+        var targetBitmap = normalizedBitmap ?? bitmap;
         var width = _encodedFrameWidth;
         var height = _encodedFrameHeight;
         var bounds = new Rectangle(0, 0, width, height);
-        var bitmapData = normalizedBitmap.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var bitmapData = targetBitmap.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         try
         {
             var pixelBuffer = VideoFrameBuffer.CopyToContiguousBgraBuffer(bitmapData.Scan0, width, height, bitmapData.Stride);
@@ -654,7 +656,8 @@ internal sealed class WebRtcWindowStreamSession : IWebRtcStreamSession
         }
         finally
         {
-            normalizedBitmap.UnlockBits(bitmapData);
+            targetBitmap.UnlockBits(bitmapData);
+            normalizedBitmap?.Dispose();
         }
     }
 
@@ -698,11 +701,6 @@ internal sealed class WebRtcWindowStreamSession : IWebRtcStreamSession
 
     private Bitmap NormalizeBitmapForEncoding(Bitmap source, int sourceWidth, int sourceHeight)
     {
-        if (sourceWidth == _encodedFrameWidth && sourceHeight == _encodedFrameHeight && source.Width == sourceWidth && source.Height == sourceHeight)
-        {
-            return (Bitmap)source.Clone();
-        }
-
         var normalizedBitmap = new Bitmap(_encodedFrameWidth, _encodedFrameHeight, PixelFormat.Format32bppArgb);
         using var graphics = Graphics.FromImage(normalizedBitmap);
         graphics.Clear(Color.Black);

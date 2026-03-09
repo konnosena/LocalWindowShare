@@ -62,24 +62,31 @@ internal sealed class PortalServer : IAsyncDisposable
             options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
         });
 
-        var accessPolicy = _runtimeState.CurrentAccessPolicy;
+        // Bind Kestrel to ALL possible addresses (ignoring disabled state)
+        // so that toggling a switch doesn't require a server restart.
+        // The middleware checks _runtimeState.CurrentAccessPolicy dynamically
+        // to reject requests on disabled addresses.
+        var kestrelPolicy = new NetworkAccessPolicy(
+            _runtimeState.Port,
+            _runtimeState.ManualAccessRules,
+            PortalDisabledAccessRules.Empty);
         builder.WebHost.ConfigureKestrel(options =>
         {
-            foreach (var address in accessPolicy.BindAddresses)
+            foreach (var address in kestrelPolicy.BindAddresses)
             {
-                options.Listen(address, accessPolicy.Port);
+                options.Listen(address, kestrelPolicy.Port);
             }
         });
 
         builder.Services.AddSingleton(_runtimeState);
-        builder.Services.AddSingleton(accessPolicy);
+        builder.Services.AddSingleton(_runtimeState.CurrentAccessPolicy);
         builder.Services.AddSingleton(_connectionTracker);
         builder.Services.AddSingleton(_logStore);
         builder.Services.AddSingleton(_sessionStore);
         builder.Services.AddSingleton<WindowBroker>();
 
         var app = builder.Build();
-        ConfigurePipeline(app, accessPolicy);
+        ConfigurePipeline(app);
         await app.StartAsync(cancellationToken);
         _app = app;
         _logStore.AddInformation("server", $"Server started on {string.Join(", ", _runtimeState.ListenUrls)}");
@@ -125,11 +132,22 @@ internal sealed class PortalServer : IAsyncDisposable
             $"Disconnected client {target.EnvironmentLabel} ({target.RemoteAddress}). Sessions={target.SessionIds.Count}, realtime={target.RealtimeConnectionCount}.");
     }
 
-    private void ConfigurePipeline(WebApplication app, NetworkAccessPolicy accessPolicy)
+    private void ConfigurePipeline(WebApplication app)
     {
         app.Use(async (context, next) =>
         {
-            if (!accessPolicy.IsAllowed(context.Connection.RemoteIpAddress))
+            var currentPolicy = _runtimeState.CurrentAccessPolicy;
+
+            // Reject if the local bind address is currently disabled
+            var localAddr = context.Connection.LocalIpAddress;
+            if (localAddr is not null && !currentPolicy.IsBindAddressEnabled(localAddr))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                _connectionTracker.TrackRequest(context);
+                return;
+            }
+
+            if (!currentPolicy.IsAllowed(context.Connection.RemoteIpAddress))
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 if (context.Request.Path.StartsWithSegments("/api"))

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -12,6 +13,10 @@ internal sealed class WindowBroker
         ImageCodecInfo.GetImageEncoders().FirstOrDefault(codec => codec.FormatID == ImageFormat.Jpeg.Guid));
 
     private static readonly nint ShellWindow = NativeMethods.GetShellWindow();
+
+    // Cache process names to avoid repeated Process.GetProcessById() calls
+    private static readonly ConcurrentDictionary<int, (string Name, long TimestampMs)> ProcessNameCache = new();
+    private const long ProcessCacheTtlMs = 10_000;
 
     public static bool IsScreenHandle(long handle) => handle < 0;
 
@@ -100,14 +105,21 @@ internal sealed class WindowBroker
 
         try
         {
-            using var capturedBitmap = CaptureBitmap(windowHandle, summary);
-            using var scaledBitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth);
-            var imageBytes = EncodeFrameImage(scaledBitmap, format, quality, out var contentType);
-
-            frame = new WindowFrame(summary, scaledBitmap.Width, scaledBitmap.Height, imageBytes, contentType);
-            message = string.Empty;
-            statusCode = StatusCodes.Status200OK;
-            return true;
+            var capturedBitmap = CaptureBitmap(windowHandle, summary);
+            var scaledBitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth, out var wasScaled);
+            try
+            {
+                var imageBytes = EncodeFrameImage(scaledBitmap, format, quality, out var contentType);
+                frame = new WindowFrame(summary, scaledBitmap.Width, scaledBitmap.Height, imageBytes, contentType);
+                message = string.Empty;
+                statusCode = StatusCodes.Status200OK;
+                return true;
+            }
+            finally
+            {
+                scaledBitmap.Dispose();
+                if (wasScaled) capturedBitmap.Dispose();
+            }
         }
         catch (Exception ex)
         {
@@ -150,8 +162,9 @@ internal sealed class WindowBroker
 
         try
         {
-            using var capturedBitmap = CaptureBitmap(windowHandle, summary, preferScreenCaptureOnly);
-            bitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth, lowLatencyScaling);
+            var capturedBitmap = CaptureBitmap(windowHandle, summary, preferScreenCaptureOnly);
+            bitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth, lowLatencyScaling, out var wasScaled);
+            if (wasScaled) capturedBitmap.Dispose();
             message = string.Empty;
             statusCode = StatusCodes.Status200OK;
             return true;
@@ -450,14 +463,21 @@ internal sealed class WindowBroker
 
         try
         {
-            using var capturedBitmap = CaptureScreenBitmap(summary);
-            using var scaledBitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth);
-            var imageBytes = EncodeFrameImage(scaledBitmap, format, quality, out var contentType);
-
-            frame = new WindowFrame(summary, scaledBitmap.Width, scaledBitmap.Height, imageBytes, contentType);
-            message = string.Empty;
-            statusCode = StatusCodes.Status200OK;
-            return true;
+            var capturedBitmap = CaptureScreenBitmap(summary);
+            var scaledBitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth, out var wasScaled);
+            try
+            {
+                var imageBytes = EncodeFrameImage(scaledBitmap, format, quality, out var contentType);
+                frame = new WindowFrame(summary, scaledBitmap.Width, scaledBitmap.Height, imageBytes, contentType);
+                message = string.Empty;
+                statusCode = StatusCodes.Status200OK;
+                return true;
+            }
+            finally
+            {
+                scaledBitmap.Dispose();
+                if (wasScaled) capturedBitmap.Dispose();
+            }
         }
         catch (Exception ex)
         {
@@ -481,8 +501,9 @@ internal sealed class WindowBroker
 
         try
         {
-            using var capturedBitmap = CaptureScreenBitmap(summary);
-            bitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth, lowLatencyScaling);
+            var capturedBitmap = CaptureScreenBitmap(summary);
+            bitmap = ScaleBitmapIfNeeded(capturedBitmap, maxWidth, lowLatencyScaling, out var wasScaled);
+            if (wasScaled) capturedBitmap.Dispose();
             message = string.Empty;
             statusCode = StatusCodes.Status200OK;
             return true;
@@ -587,14 +608,36 @@ internal sealed class WindowBroker
             return "unknown";
         }
 
+        var now = Environment.TickCount64;
+        if (ProcessNameCache.TryGetValue(processId, out var cached) &&
+            (now - cached.TimestampMs) < ProcessCacheTtlMs)
+        {
+            return cached.Name;
+        }
+
+        string name;
         try
         {
-            return Process.GetProcessById(processId).ProcessName;
+            name = Process.GetProcessById(processId).ProcessName;
         }
         catch
         {
-            return processId.ToString();
+            name = processId.ToString();
         }
+
+        ProcessNameCache[processId] = (name, now);
+
+        // Evict stale entries periodically
+        if (ProcessNameCache.Count > 200)
+        {
+            foreach (var kvp in ProcessNameCache)
+            {
+                if ((now - kvp.Value.TimestampMs) > ProcessCacheTtlMs)
+                    ProcessNameCache.TryRemove(kvp.Key, out _);
+            }
+        }
+
+        return name;
     }
 
     private static string GetWindowTitle(nint windowHandle)
@@ -919,14 +962,22 @@ internal sealed class WindowBroker
         return totalSamples > 0;
     }
 
-    private static Bitmap ScaleBitmapIfNeeded(Bitmap source, int? maxWidth, bool lowLatencyScaling = false)
+    private static Bitmap ScaleBitmapIfNeeded(Bitmap source, int? maxWidth, out bool wasScaled)
+    {
+        return ScaleBitmapIfNeeded(source, maxWidth, false, out wasScaled);
+    }
+
+    private static Bitmap ScaleBitmapIfNeeded(Bitmap source, int? maxWidth, bool lowLatencyScaling, out bool wasScaled)
     {
         var requestedWidth = maxWidth ?? source.Width;
         var targetWidth = Math.Clamp(requestedWidth, 240, source.Width);
         if (targetWidth >= source.Width)
         {
-            return (Bitmap)source.Clone();
+            wasScaled = false;
+            return source;
         }
+
+        wasScaled = true;
 
         targetWidth = MakeEven(targetWidth);
         var targetHeight = MakeEven((int)Math.Round(source.Height * (targetWidth / (double)source.Width)));
